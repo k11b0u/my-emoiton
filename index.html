@@ -15,6 +15,35 @@
   .row{display:flex;gap:10px;flex-wrap:wrap}
   .row > * { flex:1 }
   small{color:#666}
+  /* ===== 状態カードのコントラスト改善 ===== */
+.card{ background:#121212; border-color:#333; }
+
+/* 入力系の共通見やすさ */
+input, textarea, select{
+  background:#1a1a1a; color:#eee; border:1px solid #444;
+}
+input::placeholder, textarea::placeholder{ color:#9aa; }
+
+/* ボタン：通常／ホバー／無効のコントラストを固定 */
+button{
+  background:#1e1e1e; color:#f1f1f1; border:1px solid #444;
+  transition:background .15s ease, transform .02s ease;
+}
+button:hover:not(:disabled){ background:#2a2a2a; }
+button:active:not(:disabled){ transform:translateY(1px); }
+
+/* 無効ボタンでも文字が消えないようにする */
+button:disabled{
+  background:#2a2a2a; color:#9aa; border-color:#444;
+  opacity:1; cursor:not-allowed;
+}
+
+/* 説明文の文字が薄すぎる時の補正 */
+.muted{ color:#b0b0b0; }
+
+/* ログ枠もダークで読みやすく */
+#log{ background:#0f0f0f; color:#e6e6e6; border:1px solid #333; }
+
 </style>
 </head>
 <body>
@@ -391,3 +420,4 @@ if(new URLSearchParams(location.search).get("code")) loginSpotify();
 </script>
 </body>
 </html>
+
