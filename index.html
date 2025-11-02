@@ -45,7 +45,7 @@
 <script>
 /* ===================== 設定（あなたの値を使用） ===================== */
 const SPOTIFY_CLIENT_ID = "7838a0cf003644ae8b5f3f75b9eb534e";
-const REDIRECT_URI = "https://my-emotion.vercel.app/index.html";  // Spotify側にも同じURIを登録
+const REDIRECT_URI = "https://my-emotion-app.vercel.app/index.html";  // Spotify側にも同じURIを登録
 const SCOPES = [
   "user-read-playback-state","user-modify-playback-state",
   "playlist-read-private","playlist-read-collaborative","streaming"
@@ -347,4 +347,5 @@ if(new URLSearchParams(location.search).get("code")) loginSpotify();
 </script>
 </body>
 </html>
+
 
