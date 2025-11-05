@@ -2,144 +2,173 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Emotion Record</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Emotion Control (Music Auto-Switch)</title>
 <style>
   :root { color-scheme: light dark; }
-  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:880px;margin:20px auto;padding:0 12px}
-  .card{border:1px solid #333;border-radius:14px;padding:16px;margin:14px 0;background:#121212;box-shadow:0 1px 4px rgba(0,0,0,.06)}
-  button{padding:10px 14px;border-radius:10px;border:1px solid #444;background:#1e1e1e;color:#f1f1f1;cursor:pointer;transition:background .15s ease, transform .02s ease}
-  button:hover:not(:disabled){ background:#2a2a2a; }
-  button:active:not(:disabled){ transform:translateY(1px); }
-  button:disabled{ background:#2a2a2a; color:#9aa; border-color:#444; opacity:1; cursor:not-allowed; }
-  code{background:#1b1b1b;padding:2px 6px;border-radius:6px}
-  .muted{color:#b0b0b0}
-  input,textarea,select{width:100%;padding:8px;border:1px solid #444;border-radius:10px;background:#1a1a1a;color:#eee}
-  input::placeholder,textarea::placeholder{color:#9aa}
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:900px;margin:20px auto;padding:0 14px}
+  .card{border:1px solid #333;border-radius:14px;padding:16px;margin:14px 0;background:#121212;box-shadow:0 1px 4px rgba(0,0,0,.25)}
   .row{display:flex;gap:10px;flex-wrap:wrap}
-  .row > * { flex:1 }
-  small{color:#9aa}
-  .logbox{white-space:pre-wrap;height:180px;overflow:auto;background:#0f0f0f;color:#e8e8e8;border:1px solid #333;border-radius:8px;padding:8px;font-family:ui-monospace,Menlo,Consolas,monospace}
+  .row>*{flex:1}
+  label{display:block;margin:.25rem 0 .25rem}
+  input,select,textarea{width:100%;padding:10px;border:1px solid #444;border-radius:10px;background:#1a1a1a;color:#eee}
+  button{padding:10px 14px;border-radius:10px;border:1px solid #444;background:#1e1e1e;color:#f1f1f1;cursor:pointer}
+  button:hover:not(:disabled){background:#2a2a2a}
+  button:disabled{opacity:1;color:#9aa;cursor:not-allowed}
+  .muted{color:#b0b0b0}
+  #log{white-space:pre-wrap;height:180px;overflow:auto;background:#0f0f0f;color:#e8e8e8;border:1px solid #333;border-radius:8px;padding:8px;font-family:ui-monospace,Consolas,Menlo,monospace}
+  .pill{display:inline-block;padding:.2rem .55rem;border:1px solid #444;border-radius:999px;background:#1b1b1b;margin-right:.35rem}
 </style>
 </head>
 <body>
-<h1>Emotion Record</h1>
+<h1>Emotion Control – Music Auto-Switch</h1>
 
+<!-- 状態 -->
 <div class="card">
   <h2>状態</h2>
-  <p>BLE: <span id="bleState">未接続</span>／Spotify: <span id="spState">未ログイン</span></p>
+  <p>BLE: <span id="bleState">未接続</span> ／ Spotify: <span id="spState">未ログイン</span></p>
   <div class="row">
     <button id="btnBle">心拍センサー接続（COOSPO）</button>
-    <button id="btnSp">Spotifyログイン</button>
+    <button id="btnLogin">Spotifyログイン</button>
     <button id="btnStart">セッション開始</button>
     <button id="btnStop" disabled>セッション終了</button>
   </div>
-
   <div class="row" style="margin-top:8px">
     <div>
-      <label>本日の条件（解析用ラベル）</label>
+      <label>参加者ID（pid）</label>
+      <input id="pid" placeholder="hiro" value="hiro">
+    </div>
+    <div>
+      <label>本日の条件（解析ラベル）</label>
       <select id="cond">
         <option value="NONE">NONE（介入なし）</option>
         <option value="SCENT">SCENT（香りのみ）</option>
         <option value="MUSIC" selected>MUSIC（音楽のみ）</option>
         <option value="BOTH">BOTH（複合）</option>
       </select>
-      <small>※ ここは「解析用に記録するラベル」。実際の介入ON/OFFはコード内のコメント位置で切替。</small>
-    </div>
-    <div>
-      <label>参加者ID（pid）</label>
-      <input id="pid" placeholder="hiro" value="hiro"/>
+      <small class="muted">※ 実際の音楽制御ON/OFFはコード側の条件で実施</small>
     </div>
   </div>
-  <p class="muted">※ Spotifyは「ユーザーが何かで再生中のデバイス」があるときだけ制御します（勝手に音は鳴りません）。</p>
+  <div class="row" style="margin-top:8px">
+    <div>
+      <label>Spotify 再生デバイス</label>
+      <div class="row" style="gap:8px">
+        <select id="deviceSel"></select>
+        <button id="btnRefreshDev" title="デバイス再取得">再取得</button>
+        <button id="btnTransfer" title="この端末へ転送＆再生ON">転送</button>
+      </div>
+      <small class="muted">※ ここで選んだデバイスに対して再生（/pause や /play に device_id を付与）</small>
+    </div>
+  </div>
+  <p class="muted">※ Spotifyは「再生可能なアクティブデバイス」があるときだけ制御します（勝手に音は鳴りません）。</p>
 </div>
 
+<!-- ログ -->
 <div class="card">
   <h2>ログ</h2>
-  <pre id="log" class="logbox"></pre>
+  <div id="tags">
+    <span class="pill" id="tagEmo">emo:-</span>
+    <span class="pill" id="tagHR">HR:-</span>
+    <span class="pill" id="tagRMSSD">RMSSD(s):-</span>
+    <span class="pill" id="tagZ">zHR/zRMSSD:-</span>
+    <span class="pill" id="tagCtx">ctx:-</span>
+  </div>
+  <pre id="log"></pre>
   <div class="row">
     <button id="btnCsv" disabled>CSVダウンロード</button>
-    <button id="btnClear">画面ログをクリア</button>
+    <button id="btnClear">ログクリア</button>
   </div>
-  <small class="muted">列: timestamp,datetime,pid,day,session_id,block,condition,hr,rmssd,rmssd_ms,z_hr,z_rmssd,d_hr,d_rmssd,emotion,track_id,track_name,artists,context_uri,hr_base,rmssd_base,sd_hr,sd_rmssd,is_playing,exercise,valid_for_rank,mood,relax,note</small>
 </div>
 
+<!-- アンケ -->
 <div class="card">
   <h2>就寝前アンケート</h2>
   <div class="row">
-    <div><label>いまの気分（0〜10）</label><input type="number" id="mood" min="0" max="10"/></div>
-    <div><label>リラックス度（0〜10）</label><input type="number" id="relax" min="0" max="10"/></div>
+    <div><label>いまの気分（0〜10）</label><input type="number" id="mood" min="0" max="10"></div>
+    <div><label>リラックス度（0〜10）</label><input type="number" id="relax" min="0" max="10"></div>
   </div>
-  <label>メモ（任意）</label><textarea id="notes" rows="2" placeholder="寝つき・出来事など"></textarea>
+  <label>メモ（任意）</label>
+  <textarea id="notes" rows="2" placeholder="寝つき・出来事など"></textarea>
   <button id="btnNote">追加</button>
 </div>
 
 <script>
-// ====================== 設定（👆必ず置き換え） ======================
-const SPOTIFY_CLIENT_ID = "7838a0cf003644ae8b5f3f75b9eb534e";  // ← SpotifyのClient ID
-const REDIRECT_URI       = "https://my-emotion2025.vercel.app/"; // ← SpotifyダッシュボードのRedirect URIと一致
+/* ===================== 必ず置換 ===================== */
+// 1) SpotifyアプリのClient ID
+const SPOTIFY_CLIENT_ID = "7838a0cf003644ae8b5f3f75b9eb534e"; // ← 置き換え
 
-// 介入で使うプレイリスト（任意：必要なら置き換え）
-const PLAYLIST_TENSION_TO_CALM = "spotify:playlist:6lEP2HI9ecRpSoHQNRTok7";
-const PLAYLIST_DEPRESS_TO_LIFT = "spotify:playlist:0TFRed2ZNnofW4uGxjytvT";
-const PLAYLIST_CALM_MAINTAIN   = "spotify:playlist:2m9HoHfpO0tk5eky1fopVu";
+// 2) Spotifyダッシュボードに登録した Redirect URI（このページのURL）
+const REDIRECT_URI = "https://my-emotion2025.vercel.app/"; // ← 置き換え
 
-// SwitchBotのエンドポイント（Vercel FunctionsやCloudflare等を使う場合）
-const SWITCHBOT_PROXY = "/api/switchbot"; // 使わないならそのままでOK
+// 3) 使うプレイリスト（例はダミー）
+const PLAYLIST_TENSION_TO_CALM = "spotify:playlist:6lEP2HI9ecRpSoHQNRTok7"; // 緊張→鎮静
+const PLAYLIST_DEPRESS_TO_LIFT = "spotify:playlist:0TFRed2ZNnofW4uGxjytvT"; // 落ち込み→鎮静
+const PLAYLIST_CALM_MAINTAIN   = "spotify:playlist:2m9HoHfpO0tk5eky1fopVu"; // 鎮静維持
+/* ==================================================== */
 
-// Spotifyスコープ
+// 鎮静時の方針："music"（維持用プレイリスト流す） or "silence"（ポーズ）
+const CALM_POLICY = "music";
+
+// 自動切替の有効化（MUSIC / BOTH のときオンにする）
+const ENABLE_AUTOSWITCH = true;
+
+// クールダウン（連続切替防止）
+const SWITCH_COOLDOWN_MS = 8000;
+
+// Spotify スコープ
 const SCOPES = [
   "user-read-playback-state","user-modify-playback-state",
   "playlist-read-private","playlist-read-collaborative","streaming"
 ].join(" ");
-// ==================================================================
 
-// ---- 画面要素
-const logEl      = document.getElementById("log");
+// ====== 状態変数 ======
+const logEl = document.getElementById("log");
 const bleStateEl = document.getElementById("bleState");
 const spStateEl  = document.getElementById("spState");
+const deviceSel  = document.getElementById("deviceSel");
 const btnCsv     = document.getElementById("btnCsv");
-const btnClear   = document.getElementById("btnClear");
-const condSel    = document.getElementById("cond");
 
-// ---- 状態変数
-let hr = null;           // 心拍（BPM）
-let rrList = [];         // 直近のRR間隔（秒）
-let prevHR = null, prevRMSSD = null;
+const tagEmo = document.getElementById("tagEmo");
+const tagHR  = document.getElementById("tagHR");
+const tagRM  = document.getElementById("tagRMSSD");
+const tagZ   = document.getElementById("tagZ");
+const tagCtx = document.getElementById("tagCtx");
 
-let sessionId = Math.random().toString(36).slice(2,10);
+let hr = null, rrList = [];
 let timer = null;
+let sessionId = Math.random().toString(36).slice(2,10);
 let spotifyAccessToken = null;
+let selectedDeviceId = "";
+let csvRows = [[]];
 
-// 個人ベースライン（EWMA）
+// 個人ベースライン（簡易EWMA）
 let hr_base = 70, sd_hr = 8;
-let rmssd_base = 0.040, sd_rmssd = 0.015;
+let rmssd_base = 0.04, sd_rmssd = 0.015;
 const EWMA = 0.05;
 
-// CSV（先頭にヘッダ）
-let csvRows = [[
-  "timestamp","datetime","pid","day","session_id","block","condition",
-  "hr","rmssd","rmssd_ms","z_hr","z_rmssd","d_hr","d_rmssd",
-  "emotion",
-  "track_id","track_name","artists","context_uri",
-  "hr_base","rmssd_base","sd_hr","sd_rmssd",
-  "is_playing","exercise","valid_for_rank",
-  "mood","relax","note"
-]];
+let prevHR=null, prevRMSSD=null;
+let lastContextUri = "";
+let lastSwitchMs = 0;
 
-// ========= ユーティリティ =========
+// ====== ユーティリティ ======
+const isoNow = ()=> new Date().toISOString().replace("T"," ").slice(0,19);
 function log(s){ logEl.textContent += s + "\n"; logEl.scrollTop = logEl.scrollHeight; }
 function clearLog(){ logEl.textContent = ""; }
-function isoNow(){ return new Date().toISOString().replace("T"," ").slice(0,19); }
-function mean(a){ return a.length ? a.reduce((x,y)=>x+y,0)/a.length : null; }
+
+function setTag(el, text){ el.textContent = text; }
+
+// ====== RMSSD（RR秒） ======
 function calcRMSSD(rrs){
   if(rrs.length < 3) return null;
   let sum=0, n=0;
-  for(let i=1;i<rrs.length;i++){ const d=rrs[i]-rrs[i-1]; sum+=d*d; n++; }
-  return Math.sqrt(sum/n); // 単位: 秒
+  for(let i=1;i<rrs.length;i++){
+    const d = rrs[i]-rrs[i-1];
+    sum += d*d; n++;
+  }
+  return Math.sqrt(sum/n);
 }
 
-// ========= Web Bluetooth（0x180D） =========
+// ====== Web Bluetooth（HeartRate 0x180D） ======
 async function connectBLE(){
   try{
     log("BLE: デバイス選択…");
@@ -147,31 +176,28 @@ async function connectBLE(){
       filters:[{services:["heart_rate"]}],
       optionalServices:["heart_rate"]
     });
-    const server  = await dev.gatt.connect();
+    const server = await dev.gatt.connect();
     const service = await server.getPrimaryService("heart_rate");
     const ch = await service.getCharacteristic("heart_rate_measurement");
     await ch.startNotifications();
-
     ch.addEventListener("characteristicvaluechanged", e=>{
       const v = e.target.value;
-      const flags  = v.getUint8(0);
-      const hrVal  = (flags & 0x01) ? v.getUint16(1,true) : v.getUint8(1);
-      if(Number.isFinite(hrVal)) hr = hrVal;
+      const flags = v.getUint8(0);
+      const hrValue = (flags & 0x01) ? v.getUint16(1,true) : v.getUint8(1);
+      hr = hrValue;
 
       let idx = (flags & 0x01) ? 3 : 2;
       const rrLocal = [];
       while(idx+1 < v.byteLength){
         const rr = v.getUint16(idx,true)/1024.0; // sec
-        rrLocal.push(rr);
-        idx += 2;
+        rrLocal.push(rr); idx += 2;
       }
       if(rrLocal.length){
         rrList.push(...rrLocal);
         if(rrList.length>60) rrList = rrList.slice(-60);
       }
-      bleStateEl.textContent = `接続中（HR=${hrVal})`;
+      bleStateEl.textContent = `接続中（HR=${hr})`;
     });
-
     bleStateEl.textContent = "接続完了";
     log("BLE: 接続しました");
   }catch(err){
@@ -180,14 +206,15 @@ async function connectBLE(){
   }
 }
 
-// ========= Spotify（PKCE） =========
+// ====== Spotify PKCE ======
 function base64url(bytes){
   return btoa(String.fromCharCode(...new Uint8Array(bytes)))
     .replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
 }
 async function pkce(){
   const ver = base64url(crypto.getRandomValues(new Uint8Array(32)));
-  const dig = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(ver));
+  const enc = new TextEncoder().encode(ver);
+  const dig = await crypto.subtle.digest("SHA-256", enc);
   const chal = base64url(dig);
   sessionStorage.setItem("pkce_verifier", ver);
   return chal;
@@ -210,48 +237,93 @@ async function loginSpotify(){
   }
   const ver = sessionStorage.getItem("pkce_verifier");
   const body = new URLSearchParams({
-    grant_type:"authorization_code",
-    code,
-    redirect_uri:REDIRECT_URI,
-    client_id:SPOTIFY_CLIENT_ID,
-    code_verifier:ver
+    grant_type:"authorization_code", code,
+    redirect_uri:REDIRECT_URI, client_id:SPOTIFY_CLIENT_ID, code_verifier:ver
   });
   const r = await fetch("https://accounts.spotify.com/api/token", {
-    method:"POST",
-    headers:{ "Content-Type":"application/x-www-form-urlencoded" },
-    body
+    method:"POST", headers:{ "Content-Type":"application/x-www-form-urlencoded" }, body
   });
   const tok = await r.json();
   if(tok.access_token){
     spotifyAccessToken = tok.access_token;
     spStateEl.textContent = "ログイン済み";
     log("Spotify: ログイン完了");
-    history.replaceState({}, "", REDIRECT_URI); // URLの?code削除
+    history.replaceState({}, "", REDIRECT_URI);
+    await refreshDevices();
   }else{
-    log("Spotify トークン取得失敗: "+JSON.stringify(tok).slice(0,300));
+    log("Spotify トークン失敗: "+JSON.stringify(tok));
   }
 }
-async function spRequest(method, url, body){
+async function spRequest(method, url, body, params){
   if(!spotifyAccessToken) throw new Error("no token");
-  return fetch(url, {
+  const full = params ? (url + (url.includes("?")?"&":"?") + new URLSearchParams(params)) : url;
+  return fetch(full,{
     method,
     headers:{ "Authorization":"Bearer "+spotifyAccessToken, "Content-Type":"application/json" },
     body: body? JSON.stringify(body): undefined
   });
 }
-async function ensureShuffleOn(){
-  try{ await spRequest("PUT","https://api.spotify.com/v1/me/player/shuffle?state=true"); }catch(_){}
+
+// ====== デバイス操作 ======
+async function listDevices(){
+  try{
+    const r = await spRequest("GET","https://api.spotify.com/v1/me/player/devices");
+    if(!r.ok) return [];
+    const j = await r.json();
+    return j.devices||[];
+  }catch(_){ return []; }
+}
+async function refreshDevices(){
+  const devs = await listDevices();
+  deviceSel.innerHTML = "";
+  devs.forEach(d=>{
+    const opt = document.createElement("option");
+    opt.value = d.id; opt.textContent = `${d.name} ${d.is_active?"(active)":""}`;
+    deviceSel.appendChild(opt);
+  });
+  if(devs.length){
+    // アクティブ優先
+    const active = devs.find(d=>d.is_active);
+    selectedDeviceId = active ? active.id : devs[0].id;
+    deviceSel.value = selectedDeviceId;
+  }else{
+    const opt = document.createElement("option");
+    opt.value = ""; opt.textContent = "デバイスなし（Spotifyを起動して一度再生→停止）";
+    deviceSel.appendChild(opt);
+    selectedDeviceId = "";
+  }
+}
+async function transferPlayback(deviceId, play=true){
+  if(!deviceId) return false;
+  try{
+    const r = await spRequest("PUT","https://api.spotify.com/v1/me/player",
+      { device_ids:[deviceId], play: !!play });
+    return r.status===200 || r.status===204 || r.status===202;
+  }catch(_){ return false; }
+}
+async function ensureShuffleOn(deviceId){
+  try{
+    await spRequest("PUT","https://api.spotify.com/v1/me/player/shuffle",null,{state:"true",device_id:deviceId});
+  }catch(e){ log("shuffle err: "+e.message); }
 }
 async function playPlaylist(uri){
+  if(!selectedDeviceId){ log("play: device未選択"); return; }
+  await ensureShuffleOn(selectedDeviceId);
+  const r = await spRequest("PUT","https://api.spotify.com/v1/me/player/play",
+    { context_uri: uri, position_ms:0 }, { device_id:selectedDeviceId });
+  if(!r.ok){
+    log("play err: "+(await r.text()).slice(0,200));
+  }
+}
+async function pausePlayback(){
+  if(!selectedDeviceId){ log("pause: device未選択"); return; }
   try{
-    await ensureShuffleOn();
-    const r = await spRequest("PUT","https://api.spotify.com/v1/me/player/play",{ context_uri: uri, position_ms: 0 });
-    if(!r.ok){ log("play err: "+(await r.text()).slice(0,200)); }
-  }catch(e){ log("play err: "+e.message); }
+    await spRequest("PUT","https://api.spotify.com/v1/me/player/pause",null,{device_id:selectedDeviceId});
+  }catch(e){ log("pause err: "+e.message); }
 }
 async function getCurrentPlaying(){
   try{
-    const r = await spRequest("GET","https://api.spotify.com/v1/me/player/currently-playing");
+    const r = await spRequest("GET","https://api.spotify.com/v1/me/player/currently-playing",null,{market:"from_token"});
     if(r.status===204) return null;
     return await r.json();
   }catch(_){ return null; }
@@ -259,155 +331,173 @@ async function getCurrentPlaying(){
 function extractTrackInfo(j){
   try{
     if(!j || !j.is_playing || !j.item) return {track_id:"",track_name:"",artists:"",context_uri:""};
-    const item=j.item;
-    const artists=(item.artists||[]).map(a=>a.name).join(", ");
+    const item = j.item;
+    const artists = (item.artists||[]).map(a=>a.name).join(", ");
     const ctx = (j.context && j.context.uri) ? j.context.uri : "";
     return { track_id:item.id||"", track_name:item.name||"", artists, context_uri: ctx };
   }catch(_){ return {track_id:"",track_name:"",artists:"",context_uri:""}; }
 }
 
-// ========= SwitchBot（任意） =========
-async function switchbotCommand(deviceId, command){
-  try{
-    const r = await fetch(SWITCHBOT_PROXY, {
-      method:"POST",
-      headers:{ "Content-Type":"application/json" },
-      body: JSON.stringify({ deviceId, command })
-    });
-    if(!r.ok) log("SwitchBot err: "+r.status);
-  }catch(e){ log("SwitchBot fetch err: "+e.message); }
-}
-
-// ========= しきい値ルール（簡易） =========
-function decideEmotion(hrValue, rmssd){
+// ====== 感情推定（簡易版） ======
+function decideEmotion(hrValue, rmssd, zhr, zrmssd){
   if(rmssd==null) return "unknown";
-  if(rmssd < 0.025) return "tension"; // ※しきい値は個人で調整
+  // 低RMSSD → 緊張寄り
+  if(rmssd < 0.025) return "tension";
+  // 高RMSSD → 鎮静寄り
   if(rmssd > 0.060) return "calm";
+  // 例：低めzHR + 低めzRMSSD なら "depress" に倒す（必要なら調整）
+  if(zhr!=="" && zrmssd!=="" && (zhr<-0.5) && (zrmssd<-0.2)) return "depress";
   return "unknown";
 }
 
-// ========= 1分ごと集計ループ =========
-async function minuteTick(){
+// ====== 自動切替 ======
+async function maybeAutoSwitch(emotion, condition){
+  if(!ENABLE_AUTOSWITCH) return;
+  if(!(condition==="MUSIC" || condition==="BOTH")) return;
+  if(!selectedDeviceId){ log("auto: 再生デバイス未選択"); return; }
+
   const now = Date.now();
-  const dayStr = new Date().toLocaleDateString("ja-JP");
-  const pid = (document.getElementById("pid").value||"").trim() || "pid";
-  const condition = condSel.value; // NONE/SCENT/MUSIC/BOTH
-  const rmssd = calcRMSSD(rrList.slice(-10)); // 直近RR
-  const rmssd_ms = rmssd!=null ? Math.round(rmssd*1000) : "";
-  const z_hr = (hr!=null) ? (hr-hr_base)/sd_hr : "";
-  const z_rmssd = (rmssd!=null) ? (rmssd-rmssd_base)/sd_rmssd : "";
-  const d_hr = (prevHR!=null && hr!=null) ? (hr-prevHR) : "";
-  const d_rmssd = (prevRMSSD!=null && rmssd!=null) ? (rmssd-prevRMSSD) : "";
+  if(now - lastSwitchMs < SWITCH_COOLDOWN_MS) return;
 
-  // Spotifyの現在曲（204=未再生ならnull）
-  let is_playing = 0, track = {track_id:"",track_name:"",artists:"",context_uri:""};
-  if(spotifyAccessToken){
-    const j = await getCurrentPlaying();
-    if(j && j.is_playing){ is_playing = 1; track = extractTrackInfo(j); }
+  if(emotion==="tension"){
+    await playPlaylist(PLAYLIST_TENSION_TO_CALM);
+    lastContextUri = PLAYLIST_TENSION_TO_CALM; lastSwitchMs = Date.now();
+    log("auto: 緊張→鎮静プレイリストへ");
+    return;
   }
-
-  // 運動ざっくり除外
-  const exercise = (hr!=null && hr_base!=null && hr >= hr_base + 25) ? 1 : 0;
-
-  // 感情（簡易）
-  const emotion = decideEmotion(hr, rmssd);
-
-  // ランキング対象（介入なし×中断なし×運動なし×再生中）
-  const valid_for_rank = (condition==="NONE" && is_playing && !exercise) ? 1 : 0;
-
-  // CSVへ
-  csvRows.push([
-    now, isoNow(), pid, dayStr, sessionId, "block1", condition,
-    hr??"", rmssd??"", rmssd_ms, z_hr===""?"":z_hr, z_rmssd===""?"":z_rmssd, d_hr, d_rmssd,
-    emotion,
-    track.track_id, track.track_name, track.artists, track.context_uri,
-    hr_base, rmssd_base, sd_hr, sd_rmssd,
-    is_playing, exercise, valid_for_rank,
-    "", "", "" // mood, relax, note は後で追記
-  ]);
-
-  // （必要なら）ここで介入ONにする：
-  // if((condition==="MUSIC" || condition==="BOTH") && emotion==="tension" && is_playing){
-  //   await playPlaylist(PLAYLIST_TENSION_TO_CALM);
-  // }
-  // if((condition==="BOTH" || condition==="SCENT") && emotion!=="unknown"){
-  //   await switchbotCommand("YOUR_DEVICE_ID", "press");
-  // }
-
-  // ベースラインの緩やかな更新（ほぼ中立域だけ）
-  if(rmssd!=null && hr!=null && Math.abs(z_hr)<0.5 && z_rmssd>-0.3){
-    hr_base    = (1-EWMA)*hr_base    + EWMA*hr;
-    rmssd_base = (1-EWMA)*rmssd_base + EWMA*rmssd;
-    sd_hr      = (1-EWMA)*sd_hr      + EWMA*Math.abs(hr-hr_base);
-    sd_rmssd   = (1-EWMA)*sd_rmssd   + EWMA*Math.abs(rmssd-rmssd_base);
-  }
-
-  prevHR = hr; prevRMSSD = rmssd;
-}
-
-// ========= セッション制御 =========
-async function startSession(){
-  if(!spotifyAccessToken) log("※ Spotify未ログインでも記録は動きます（制御はスキップ）");
-  document.getElementById("btnStart").disabled = true;
-  document.getElementById("btnStop").disabled  = false;
-  btnCsv.disabled = true;
-
-  // 新しいセッションID
-  sessionId = Math.random().toString(36).slice(2,10);
-  log("セッション開始: " + sessionId);
-
-  // 1分ループ開始（毎分の切替タイミングをざっくり1秒周期で監視）
-  let lastMinute = Math.floor(Date.now()/60000);
-  timer = setInterval(async ()=>{
-    const m = Math.floor(Date.now()/60000);
-    if(m !== lastMinute){
-      await minuteTick();
-      lastMinute = m;
-      // 次の分へ向けたRRの古い分を軽く掃除（任意）
-      if(rrList.length>60) rrList = rrList.slice(-60);
+  if(emotion==="calm"){
+    if(CALM_POLICY==="music"){
+      await playPlaylist(PLAYLIST_CALM_MAINTAIN);
+      lastContextUri = PLAYLIST_CALM_MAINTAIN; lastSwitchMs = Date.now();
+      log("auto: 鎮静維持プレイリストへ");
+    }else{
+      await pausePlayback();
+      lastContextUri = ""; lastSwitchMs = Date.now();
+      log("auto: 鎮静→停止（silence）");
     }
-  }, 1000);
+    return;
+  }
+  if(emotion==="depress"){
+    await playPlaylist(PLAYLIST_DEPRESS_TO_LIFT);
+    lastContextUri = PLAYLIST_DEPRESS_TO_LIFT; lastSwitchMs = Date.now();
+    log("auto: 落ち込み→鎮静（リフトアップ）プレイリストへ");
+    return;
+  }
+  // unknown は維持
 }
+
+// ====== CSVヘッダ ======
+function makeHeader(){
+  csvRows = [[
+    "timestamp","datetime","pid","day","session_id","condition",
+    "hr","rmssd_s","rmssd_ms","z_hr","z_rmssd","d_hr","d_rmssd",
+    "emotion","track_id","track_name","artists","context_uri",
+    "hr_base","rmssd_base","sd_hr","sd_rmssd",
+    "mood","relax","note"
+  ]];
+}
+
+// ====== セッション ======
+async function startSession(){
+  if(spotifyAccessToken){
+    await refreshDevices();
+    if(selectedDeviceId){
+      await transferPlayback(selectedDeviceId,true);
+    }
+  }else{
+    log("※ Spotify未ログイン：記録のみ可能（制御は不可）");
+  }
+
+  document.getElementById("btnStart").disabled = true;
+  document.getElementById("btnStop").disabled = false;
+  btnCsv.disabled = true;
+  makeHeader();
+  sessionId = Math.random().toString(36).slice(2,10);
+  log("セッション開始: "+sessionId);
+
+  timer = setInterval(async ()=>{
+    const now = Date.now();
+    const dayStr = new Date().toLocaleDateString("ja-JP");
+    const pid = (document.getElementById("pid").value||"pid").trim();
+    const cond = document.getElementById("cond").value;
+
+    const rmssd = calcRMSSD(rrList.slice(-10));
+    const rmssd_ms = rmssd!=null ? Math.round(rmssd*1000) : "";
+    const z_hr = (hr!=null) ? (hr-hr_base)/sd_hr : "";
+    const z_rmssd = (rmssd!=null) ? (rmssd-rmssd_base)/sd_rmssd : "";
+    const d_hr = (prevHR!=null && hr!=null) ? (hr-prevHR) : "";
+    const d_rmssd = (prevRMSSD!=null && rmssd!=null) ? (rmssd-prevRMSSD) : "";
+
+    const emo = decideEmotion(hr, rmssd, z_hr===""?"":z_hr, z_rmssd===""?"":z_rmssd);
+
+    let track = {track_id:"",track_name:"",artists:"",context_uri:""};
+    if(spotifyAccessToken){
+      const j = await getCurrentPlaying();
+      track = extractTrackInfo(j);
+      if(track.context_uri) lastContextUri = track.context_uri;
+    }
+
+    // タグUI更新
+    setTag(tagEmo, `emo:${emo}`);
+    setTag(tagHR,  `HR:${hr??"-"}`);
+    setTag(tagRM,  `RMSSD(s):${rmssd??"-"}`);
+    setTag(tagZ,   `z:${z_hr===""?"-":z_hr.toFixed?.(2)} / ${z_rmssd===""?"-":z_rmssd.toFixed?.(2)}`);
+    setTag(tagCtx, `ctx:${(track.context_uri||"-").split(":").pop()}`);
+
+    // CSV push
+    csvRows.push([
+      now, isoNow(), pid, dayStr, sessionId, cond,
+      hr??"", rmssd??"", rmssd_ms, z_hr===""?"":z_hr, z_rmssd===""?"":z_rmssd, d_hr, d_rmssd,
+      emo, track.track_id, track.track_name, track.artists, track.context_uri,
+      hr_base, rmssd_base, sd_hr, sd_rmssd,
+      "", "", "" // mood / relax / note は後でボタンで追記
+    ]);
+
+    // 自動切替
+    await maybeAutoSwitch(emo, cond);
+
+    // ベースライン緩更新（ほぼ中立）
+    if(rmssd!=null && hr!=null && Math.abs(z_hr)<0.5 && z_rmssd>-0.3){
+      hr_base    = (1-EWMA)*hr_base    + EWMA*hr;
+      rmssd_base = (1-EWMA)*rmssd_base + EWMA*rmssd;
+      sd_hr      = (1-EWMA)*sd_hr      + EWMA*Math.abs(hr-hr_base);
+      sd_rmssd   = (1-EWMA)*sd_rmssd   + EWMA*Math.abs(rmssd-rmssd_base);
+    }
+
+    prevHR = hr; prevRMSSD = rmssd;
+  }, 60*1000);
+}
+
 function stopSession(){
-  if(timer){ clearInterval(timer); timer=null; }
+  clearInterval(timer); timer=null;
   document.getElementById("btnStart").disabled = false;
-  document.getElementById("btnStop").disabled  = true;
+  document.getElementById("btnStop").disabled = true;
   btnCsv.disabled = false;
   log("セッション終了");
 }
 
-// ========= UIイベント =========
-document.getElementById("btnBle").onclick   = connectBLE;
-document.getElementById("btnSp").onclick    = loginSpotify;
-document.getElementById("btnStart").onclick = startSession;
-document.getElementById("btnStop").onclick  = stopSession;
-
-// アンケ：最後の行へ追記（なければ新規行を作る）
+// ====== アンケ（直近行に追記） ======
 document.getElementById("btnNote").onclick = ()=>{
-  const mood  = document.getElementById("mood").value||"";
-  const relax = document.getElementById("relax").value||"";
-  const notes = document.getElementById("notes").value||"";
+  const mood = document.getElementById("mood").value||"";
+  const relax= document.getElementById("relax").value||"";
+  const notes= document.getElementById("notes").value||"";
   if(csvRows.length>1){
     const last = csvRows[csvRows.length-1];
     last[last.length-3] = mood;
     last[last.length-2] = relax;
     last[last.length-1] = notes;
   }else{
-    const pid = (document.getElementById("pid").value||"pid");
-    const dayStr = new Date().toLocaleDateString("ja-JP");
-    csvRows.push([
-      Date.now(), isoNow(), pid, dayStr, sessionId, "block1", condSel.value,
-      "","","","","","","","",
-      "","","","",
+    makeHeader();
+    csvRows.push([Date.now(), isoNow(), (document.getElementById("pid").value||"pid"), new Date().toLocaleDateString("ja-JP"), sessionId, document.getElementById("cond").value,
+      "","","","","","","", "", "", "", "", "",
       hr_base, rmssd_base, sd_hr, sd_rmssd,
-      0,0,0,
-      mood,relax,notes
+      mood, relax, notes
     ]);
   }
   log("アンケ追加");
 };
 
-// CSV保存
+// ====== CSV保存 ======
 btnCsv.onclick = ()=>{
   const blob = new Blob([csvRows.map(r=>r.join(",")).join("\n")], {type:"text/csv"});
   const dayStr = new Date().toISOString().slice(0,10);
@@ -415,13 +505,25 @@ btnCsv.onclick = ()=>{
     href: URL.createObjectURL(blob),
     download: `emotion_log_${dayStr}_${sessionId}.csv`
   });
-  a.click(); setTimeout(()=>URL.revokeObjectURL(a.href), 500);
+  a.click(); URL.revokeObjectURL(a.href);
 };
 
-// 画面ログ消去
-btnClear.onclick = clearLog;
+// ====== UIイベント ======
+document.getElementById("btnBle").onclick = connectBLE;
+document.getElementById("btnLogin").onclick = loginSpotify;
+document.getElementById("btnStart").onclick = startSession;
+document.getElementById("btnStop").onclick = stopSession;
+document.getElementById("btnClear").onclick = clearLog;
 
-// 既に ?code= が付いて戻ってきたら自動でトークン交換
+document.getElementById("btnRefreshDev").onclick = refreshDevices;
+deviceSel.onchange = (e)=>{ selectedDeviceId = e.target.value; };
+document.getElementById("btnTransfer").onclick = async ()=>{
+  if(!selectedDeviceId){ log("転送: device未選択"); return; }
+  const ok = await transferPlayback(selectedDeviceId,true);
+  log(ok? "転送OK（再生ON）":"転送失敗");
+};
+
+// 既に code=? で戻ってきたら自動交換
 if(new URLSearchParams(location.search).get("code")) loginSpotify();
 </script>
 </body>
