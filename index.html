@@ -19,7 +19,6 @@
   .logbox{white-space:pre-wrap;height:180px;overflow:auto;background:#0f0f0f;color:#e8e8e8;border:1px solid #333;border-radius:8px;padding:8px;font-family:ui-monospace,Consolas,monospace}
   .pill{display:inline-block;border:1px solid #444;border-radius:999px;padding:6px 10px;background:#1a1a1a}
   .goalok{color:#27c052}
-  /* ESM モーダル */
   .modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:9999}
   .modal .box{background:#171717;border:1px solid #333;border-radius:14px;padding:18px;max-width:460px;width:92%}
   .btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
@@ -51,7 +50,7 @@
         <option value="MUSIC">MUSIC（音楽のみ）</option>
         <option value="BOTH">BOTH（複合）</option>
       </select>
-      <small class="muted">※ ここは“解析用ラベル”。実際の介入ON/OFFはコード側で制御します。</small>
+      <small class="muted">※ ここは解析用ラベル。実際の介入は判定で制御。</small>
     </div>
     <div>
       <label>参加者ID（pid）</label>
@@ -103,18 +102,26 @@
 </div>
 
 <script>
-// ====== 設定（置換ポイント） ======
-const SPOTIFY_CLIENT_ID = "7838a0cf003644ae8b5f3f75b9eb534e";     // ← あなたのClient ID
-const REDIRECT_URI       = location.origin + location.pathname;    // 同ページに戻す
+// ====== 設定 ======
+const SPOTIFY_CLIENT_ID = "7838a0cf003644ae8b5f3f75b9eb534e";
+const REDIRECT_URI       = location.origin + location.pathname;
 const SCOPES = [
   "user-read-playback-state","user-modify-playback-state",
   "playlist-read-private","playlist-read-collaborative","streaming"
 ].join(" ");
-const PLAYLIST_TENSION_TO_CALM = "spotify:playlist:6lEP2HI9ecRpSoHQNRTok7"; // 緊張→鎮静
-const PLAYLIST_DEPRESS_TO_LIFT = "spotify:playlist:0TFRed2ZNnofW4uGxjytvT"; // 落ち込み→鎮静
-const PLAYLIST_CALM_MAINTAIN   = "spotify:playlist:2m9HoHfpO0tk5eky1fopVu"; // 鎮静維持
-// ====== /設定 ======
+const PLAYLIST_TENSION_TO_CALM = "spotify:playlist:6lEP2HI9ecRpSoHQNRTok7";
+const PLAYLIST_DEPRESS_TO_LIFT = "spotify:playlist:0TFRed2ZNnofW4uGxjytvT";
+const PLAYLIST_CALM_MAINTAIN   = "spotify:playlist:2m9HoHfpO0tk5eky1fopVu";
 
+// ====== Zしきい値 & ヒステリシス ======
+// 推奨デフォルト（個人最適は後で微調整可）
+const Z_RMSSD_LOW  = -0.8;   // これ以下→緊張側
+const Z_RMSSD_HIGH = +0.8;   // これ以上→鎮静側
+const Z_HR_HIGH    = +0.6;   // HR高ぶり（緊張補強）
+const Z_HR_LOW     = -1.0;   // HR低下（落ち込み補強）
+const HYSTERESIS_N = 3;      // 3分連続で状態確定
+
+// ====== 要素 ======
 const logEl = document.getElementById("log");
 const bleStateEl = document.getElementById("bleState");
 const spStateEl  = document.getElementById("spState");
@@ -125,23 +132,28 @@ const goalSel = document.getElementById("goalMin");
 const goalView = document.getElementById("goalView");
 const esmModal = document.getElementById("esmModal");
 
+// ====== 状態変数 ======
 let hr = null, rrList = [];           // RR(秒)
 let timer = null;
-let esmTimer = null;                  // 30分おき ESM
+let esmTimer = null;
 let sessionId = Math.random().toString(36).slice(2,10);
 let spotifyAccessToken = null;
-let csvRows = [[]];                   // 後でヘッダ差し込み
+let csvRows = [[]];
 
-// 有効分カウント
-let validMin = 0;                     // 条件に沿った“有効分”
-let playMin  = 0;                     // Spotify再生中の分（MUSIC/BOTH用）
+let validMin = 0;
+let playMin  = 0;
 let anyBLE   = false;
 let bleDropped = false;
 let lastHadBLE = false;
 
-// 再生中の曲切替制御
-let currentEmotionKey = null;         // "tension"/"calm"/"depress"
-let waitingSwitch = false;            // 曲末待ち
+// プレイリスト切替制御
+let currentEmotionKey = null; // "tension"/"calm"/"depress"
+let waitingSwitch = false;
+
+// ヒステリシス用
+let rawStreakEmotion = null;  // 直近の“生判定”の感情
+let rawStreakCount   = 0;     // その連続分
+let stableEmotion    = "unknown"; // CSVへはこの“確定状態”を書き出す
 
 function log(s){ logEl.textContent += s + "\n"; logEl.scrollTop = logEl.scrollHeight; }
 function clearLog(){ logEl.textContent = ""; }
@@ -158,7 +170,7 @@ function calcRMSSD(rrs){
   return Math.sqrt(sum/n); // 秒
 }
 
-// ============ Web Bluetooth (0x180D) ============
+// ============ Web Bluetooth ============
 async function connectBLE(){
   try{
     log("BLE: デバイス選択…");
@@ -189,7 +201,6 @@ async function connectBLE(){
       bleStateEl.textContent = `接続中（HR=${hr})`;
     });
 
-    // 接続状態監視（ざっくり）
     dev.addEventListener("gattserverdisconnected", ()=>{
       bleStateEl.textContent = "切断";
       if(lastHadBLE) bleDropped = true;
@@ -287,10 +298,10 @@ async function playPlaylist(uri){
   if(!r.ok) log("play err: "+(await r.text()).slice(0,200));
 }
 
-// ===== プレイリスト切替：曲末まで待つ & 同じ感情なら何もしない
+// ===== プレイリスト切替：曲末まで待つ & 同じ感情は切替えない
 async function scheduleSwitchIfNeeded(targetKey){
-  if(targetKey===currentEmotionKey) return;    // 同じ感情は切替しない
-  if(waitingSwitch) return;                    // 既に待ち中なら二重起動しない
+  if(targetKey===currentEmotionKey) return;
+  if(waitingSwitch) return;
   waitingSwitch = true;
 
   const uri = (
@@ -299,7 +310,6 @@ async function scheduleSwitchIfNeeded(targetKey){
     PLAYLIST_CALM_MAINTAIN
   );
 
-  // いまの曲が終わるまで待機（最大5分のセーフティ）
   const deadline = Date.now()+5*60*1000;
   while(Date.now() < deadline){
     let j = null;
@@ -307,7 +317,7 @@ async function scheduleSwitchIfNeeded(targetKey){
     const info = extractTrackInfo(j);
     if(!info.is_playing || !info.duration_ms){ break; }
     const remain = Math.max(0, info.duration_ms - (info.progress_ms||0));
-    if(remain <= 3500) break; // 残り3.5秒で切替許可
+    if(remain <= 3500) break;
     await new Promise(r=>setTimeout(r, 1500));
   }
   await playPlaylist(uri);
@@ -316,11 +326,16 @@ async function scheduleSwitchIfNeeded(targetKey){
   log(`🎵 Playlist → ${targetKey}`);
 }
 
-// ============ ルール（超簡易） ============
-function decideEmotion(hrValue, rmssd){
-  if(rmssd==null) return "unknown";
-  if(rmssd < 0.025) return "tension";
-  if(rmssd > 0.060) return "calm";
+// ============ Zスコア判定（生判定） ============
+// ※ ここは“生”の1分判定。確定はヒステリシス適用後。
+function decideRawByZ(z_hr, z_rmssd){
+  if(z_hr==="" || z_rmssd==="") return "unknown";
+  // 緊張：RMSSD低下＆HR上振れ
+  if(z_rmssd <= Z_RMSSD_LOW && z_hr >= Z_HR_HIGH) return "tension";
+  // 鎮静：RMSSD上昇＆HRは極端に高くない
+  if(z_rmssd >= Z_RMSSD_HIGH && z_hr <= +0.3) return "calm";
+  // 落ち込み：HR低下でRMSSDは中庸
+  if(z_hr <= Z_HR_LOW && z_rmssd > -0.3 && z_rmssd < +0.3) return "depress";
   return "unknown";
 }
 
@@ -328,20 +343,15 @@ function decideEmotion(hrValue, rmssd){
 function randomMinutes(min, max){ return Math.floor(min + Math.random()*(max-min+1)); }
 function scheduleNextESM(){
   clearTimeout(esmTimer);
-  const m = randomMinutes(28,34); // だいたい30分
+  const m = randomMinutes(28,34);
   esmTimer = setTimeout(()=>{ showESM(); }, m*60*1000);
 }
-function showESM(){
-  esmModal.style.display = "flex";
-}
-function hideESM(){
-  esmModal.style.display = "none";
-}
+function showESM(){ esmModal.style.display = "flex"; }
+function hideESM(){ esmModal.style.display = "none"; }
 esmModal.addEventListener("click",(e)=>{ if(e.target===esmModal) hideESM(); });
 esmModal.querySelectorAll("button[data-esm]").forEach(btn=>{
   btn.addEventListener("click", ()=>{
-    const val = btn.getAttribute("data-esm"); // tense/calm/depress/skip
-    // ESMはイベント行としてCSVへ追記（HR等は空、event="esm"、esm=val）
+    const val = btn.getAttribute("data-esm");
     csvRows.push([
       Date.now(), isoNow(),
       (document.getElementById("pid").value||"pid"),
@@ -353,7 +363,8 @@ esmModal.querySelectorAll("button[data-esm]").forEach(btn=>{
       "", "", "", "", // baselines
       "", "", "",     // playing/exercise/valid_for_rank
       "", "", "",     // mood/relax/note
-      "esm", val      // 追加: event, esm
+      "esm", val,
+      "", ""
     ]);
     log(`🗳️ ESM: ${val}`);
     hideESM();
@@ -390,30 +401,29 @@ async function startSession(){
   sessionId = Math.random().toString(36).slice(2,10);
   validMin = 0; playMin = 0; anyBLE = false; bleDropped = false; lastHadBLE = false;
   currentEmotionKey = null; waitingSwitch = false;
-
-  // ゴール表示リセット
+  rawStreakEmotion = null; rawStreakCount = 0; stableEmotion = "unknown";
   updateGoalView();
 
   log("セッション開始: "+sessionId);
-
-  // ESMを最初は30分後にスケジュール
   scheduleNextESM();
 
   timer = setInterval(async ()=>{
-    const now = Date.now();
     const dayStr = new Date().toLocaleDateString("ja-JP");
     const pid = (document.getElementById("pid").value||"").trim() || "pid";
-    const condition = condSel.value; // NONE/SCENT/MUSIC/BOTH
+    const condition = condSel.value;
     const goal = parseInt(goalSel.value||"120",10);
 
-    const rmssd = calcRMSSD(rrList.slice(-10)); // 直近のRR
+    const rmssd = calcRMSSD(rrList.slice(-10));
     const rmssd_ms = rmssd!=null ? Math.round(rmssd*1000) : "";
     const z_hr = (hr!=null) ? (hr-hr_base)/sd_hr : "";
     const z_rmssd = (rmssd!=null) ? (rmssd-rmssd_base)/sd_rmssd : "";
     const d_hr = (prevHR!=null && hr!=null) ? (hr-prevHR) : "";
     const d_rmssd = (prevRMSSD!=null && rmssd!=null) ? (rmssd-prevRMSSD) : "";
-    const emotion = decideEmotion(hr, rmssd);
 
+    // 運動ざっくり除外
+    const exercise = (hr!=null && hr_base!=null && hr >= hr_base+25) ? 1 : 0;
+
+    // Spotify状態
     let playing = false, track = {track_id:"",track_name:"",artists:"",context_uri:"",is_playing:false};
     try{
       const j = await getCurrentPlaying();
@@ -422,45 +432,58 @@ async function startSession(){
       track = info;
     }catch{}
 
-    // 運動ざっくり除外
-    const exercise = (hr!=null && hr_base!=null && hr >= hr_base+25) ? 1 : 0;
+    // “生判定” → ヒステリシスで“確定状態”へ
+    let raw = decideRawByZ(z_hr, z_rmssd);
+    if(exercise) raw = "unknown"; // 運動は除外
+    if(rawStreakEmotion === raw){
+      rawStreakCount += 1;
+    }else{
+      rawStreakEmotion = raw;
+      rawStreakCount = 1;
+    }
+    if(raw !== "unknown" && rawStreakCount >= HYSTERESIS_N && raw !== stableEmotion){
+      stableEmotion = raw; // 状態確定
+      log(`🧠 Emotion確定: ${stableEmotion}（Zhr=${z_hr=== ""?"":z_hr.toFixed(2)}, Zrmssd=${z_rmssd===""?"":z_rmssd.toFixed(2)}）`);
+    }
 
-    // ランキング対象（介入なし×再生中×運動なし）
+    // 介入ロジック：MUSIC/BOTH かつ 運動除外時のみ
+    if((condition==="MUSIC" || condition==="BOTH") && !exercise){
+      const targetKey = (
+        stableEmotion==="tension" ? "tension" :
+        stableEmotion==="depress" ? "depress" :
+        stableEmotion==="calm"    ? "calm"    : null
+      );
+      if(targetKey){ scheduleSwitchIfNeeded(targetKey); }
+    }
+
+    // ランキング対象（解析用）：NONE×再生中×運動なし
     const valid_for_rank = (condition==="NONE" && playing && !exercise) ? 1 : 0;
 
     // 有効分カウント
     const gotHR = (hr!=null);
     if(gotHR){
       if(condition==="MUSIC" || condition==="BOTH"){
-        if(playing) validMin++;
-        if(playing) playMin++;
+        if(playing && !exercise) { validMin++; playMin++; }
       }else{
-        validMin++;
+        if(!exercise) validMin++;
       }
     }
-
-    // 目標表示更新
     updateGoalView(goal);
 
-    // 介入ロジック（必要なら有効化）
-    // if((condition==="MUSIC" || condition==="BOTH") && !exercise){
-    //   let targetKey = (emotion==="tension" ? "tension" : (emotion==="calm" ? "calm" : (emotion==="depress" ? "depress" : null)));
-    //   if(targetKey){ scheduleSwitchIfNeeded(targetKey); }
-    // }
-
+    // CSV行（emotionは“確定状態”を書き出す）
     csvRows.push([
-      now, isoNow(), pid, dayStr, sessionId, "block1", condition,
+      Date.now(), isoNow(), pid, dayStr, sessionId, "block1", condition,
       hr??"", rmssd??"", rmssd_ms, z_hr===""?"":z_hr, z_rmssd===""?"":z_rmssd, d_hr, d_rmssd,
-      "", "", emotion,
+      "", "", stableEmotion,
       track.track_id, track.track_name, track.artists, track.context_uri,
       hr_base, rmssd_base, sd_hr, sd_rmssd,
       playing?1:0, exercise, valid_for_rank,
-      "", "", "",   // mood/relax/note は別ボタンで追記
-      "", "",       // event / esm は通常行では空
-      "", ""        // session_minutes_valid / reason_invalid → 終了時に最終行へ付与
+      "", "", "",
+      "", "",
+      "", ""
     ]);
 
-    // ベースライン緩更新（“ほぼ中立”）
+    // ベースライン緩更新（中立帯のみ）
     if(rmssd!=null && hr!=null && z_hr!=="" && z_rmssd!=="" && Math.abs(z_hr)<0.5 && z_rmssd>-0.3){
       hr_base    = (1-EWMA)*hr_base    + EWMA*hr;
       rmssd_base = (1-EWMA)*rmssd_base + EWMA*rmssd;
@@ -469,7 +492,7 @@ async function startSession(){
     }
 
     prevHR = hr; prevRMSSD = rmssd;
-  }, 60*1000); // 1分おき
+  }, 60*1000);
 }
 
 function stopSession(){
@@ -479,7 +502,6 @@ function stopSession(){
   document.getElementById("btnStop").disabled = true;
   btnCsv.disabled = false;
 
-  // 終了時に有効判定
   const condition = condSel.value;
   let reasons = [];
   if(validMin < 60) reasons.push("<60min");
@@ -487,14 +509,11 @@ function stopSession(){
   if(bleDropped) reasons.push("ble_drop");
   const reason_invalid = reasons.join("+") || "";
 
-  // 最終行にメタをセット（無ければメタ行を作成）
   if(csvRows.length>1){
     const last = csvRows[csvRows.length-1];
-    // 最後の2列をメタ用に使っているのでそこへ
     last[last.length-2] = validMin.toString();
     last[last.length-1] = reason_invalid;
   }else{
-    // 念のため
     csvRows.push([Date.now(), isoNow(), (document.getElementById("pid").value||"pid"), new Date().toLocaleDateString("ja-JP"), sessionId, "block1", condition,
       "","","","","","","","","","",
       "","","","",
@@ -516,14 +535,13 @@ function updateGoalView(goal){
   goalView.classList.toggle("goalok", ok);
 }
 
-// アンケ：直近行の末尾3列に追記
+// アンケ：直近行へ追記
 document.getElementById("btnNote").onclick = ()=>{
   const mood = document.getElementById("mood").value||"";
   const relax = document.getElementById("relax").value||"";
   const notes = document.getElementById("notes").value||"";
   if(csvRows.length>1){
     const last = csvRows[csvRows.length-1];
-    // mood/relax/note は固定位置（最後から5〜3番目）ではないのでヘッダに合わせる：
     const idxMood  = csvRows[0].indexOf("mood");
     const idxRelax = csvRows[0].indexOf("relax");
     const idxNote  = csvRows[0].indexOf("note");
@@ -553,7 +571,7 @@ document.getElementById("btnSp").onclick = loginSpotify;
 document.getElementById("btnStart").onclick = startSession;
 document.getElementById("btnStop").onclick = stopSession;
 
-// 既に code=? で戻ってきたら自動交換
+// code=? で戻ってきたら自動交換
 if(new URLSearchParams(location.search).get("code")) loginSpotify();
 </script>
 </body>
