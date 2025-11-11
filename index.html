@@ -6,7 +6,7 @@
 <title>Emotion Record</title>
 <style>
   :root{ color-scheme:light dark; --bg:#121212; --panel:#1a1a1a; --line:#2a2a2a; --muted:#a9b0b8; --txt:#f3f5f7;
-         --accent:#5ac8fa; --ok:#27c052; --warn:#f5a524; --danger:#ff4d4f; }
+         --ok:#27c052; }
   body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--txt);
        max-width:1080px;margin:16px auto;padding:0 14px}
   h1{margin:8px 0 12px}
@@ -19,8 +19,6 @@
   .btn:hover:not(:disabled){ background:#252525 }
   .btn:disabled{ opacity:.6; cursor:not-allowed }
   .btn-danger{ background:#2a1516;border-color:#4d1f21 }
-  .btn-danger:hover{ background:#3a1c1e }
-  .btn-ghost{ background:transparent }
   .pill{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:999px;background:#161616;padding:6px 10px}
   .badge{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:8px;background:#151515;padding:4px 8px;font-size:13px}
   .muted{color:var(--muted)}
@@ -31,8 +29,6 @@
   .bar{height:100%;width:0%;background:linear-gradient(90deg, #3870ff, #50e3c2)}
   .tiny{font-size:12px}
   .chips{display:flex;gap:6px;flex-wrap:wrap}
-  .switches{display:flex;gap:8px;flex-wrap:wrap}
-  .switches .pill{cursor:pointer}
   .colfit{flex:0 0 auto}
 </style>
 </head>
@@ -57,8 +53,6 @@
       <button id="btnSp" class="btn">Spotifyログイン</button>
       <button id="btnStart" class="btn">セッション開始</button>
       <button id="btnStop" class="btn btn-danger" disabled>セッション終了</button>
-      <button id="btnPause" class="btn btn-ghost" disabled>一時停止</button>
-      <button id="btnResume" class="btn" disabled>再開</button>
     </div>
 
     <div class="row" style="margin:10px 0">
@@ -98,20 +92,8 @@
           <button id="dayPlus" class="btn colfit">＋</button>
         </div>
       </div>
-      <div class="switches" style="align-items:center">
+      <div class="row" style="gap:8px;align-items:center">
         <label class="pill"><input type="checkbox" id="autoStop" checked> 目標到達で自動終了</label>
-        <label class="pill"><input type="checkbox" id="weeklyMode"> 週合計で管理（例: 480分/週）</label>
-      </div>
-    </div>
-
-    <div id="weeklyBox" class="row" style="display:none;margin-top:8px">
-      <div>
-        <label>今週の目標合計（分）</label>
-        <input type="number" id="weeklyGoal" value="480" min="60" step="30">
-      </div>
-      <div>
-        <label>今週の取得</label>
-        <div id="weeklyProg" class="pill">0 分</div>
       </div>
     </div>
 
@@ -132,7 +114,7 @@
       <h2 style="margin:0">ログ</h2>
       <div class="row" style="gap:8px;flex:0 0 auto">
         <button id="btnCsv" class="btn" disabled>CSVダウンロード</button>
-        <button id="btnClear" class="btn btn-ghost">画面ログをクリア</button>
+        <button id="btnClear" class="btn">画面ログをクリア</button>
       </div>
     </div>
     <pre id="log" class="logbox" aria-live="polite"></pre>
@@ -160,7 +142,7 @@
       <button data-esm="tense" class="btn">緊張（高ぶり）</button>
       <button data-esm="calm"  class="btn">鎮静（落ち着き）</button>
       <button data-esm="depress" class="btn">落ち込み</button>
-      <button data-esm="skip" class="btn btn-ghost">スキップ</button>
+      <button data-esm="skip" class="btn">スキップ</button>
     </div>
   </div>
 </div>
@@ -187,8 +169,6 @@ const $=s=>document.querySelector(s);
 const logEl=$("#log"), bleStateEl=$("#bleState"), spStateEl=$("#spState"), esmNext=$("#esmNext");
 function log(s){ logEl.textContent+=s+"\n"; logEl.scrollTop=logEl.scrollHeight; }
 function clearLog(){ logEl.textContent=""; }
-const JST_FMT_DATE = new Intl.DateTimeFormat("ja-JP",{timeZone:"Asia/Tokyo",year:"numeric",month:"2-digit",day:"2-digit"});
-const JST_FMT_DATETIME = new Intl.DateTimeFormat("ja-JP",{timeZone:"Asia/Tokyo",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit"});
 function nowJstObj(){ return new Date(new Date().toLocaleString("en-US",{timeZone:"Asia/Tokyo"})); }
 function dayIsoJST(d=nowJstObj()){ const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,"0"), da=String(d.getDate()).padStart(2,"0"); return `${y}-${m}-${da}`; }
 function datetimeStrJST(d=nowJstObj()){
@@ -199,12 +179,22 @@ function datetimeStrJST(d=nowJstObj()){
 function randomMinutes(min,max){ return Math.floor(min + Math.random()*(max-min+1)); }
 function csvEscape(v){ if(v==null) return ""; const s=String(v); return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s; }
 
+/* time_bin（JST） */
+function getTimeBinJST(d=nowJstObj()){
+  const h=d.getHours();
+  if (h >= 18 && h < 22) return "evening"; // 18–21:59
+  if (h >= 22 || h < 1)  return "late";    // 22–00:59
+  if (h >= 1  && h < 3)  return "deep";    // 01–02:59
+  if (h >= 3  && h < 6)  return "early";   // 03–05:59
+  return "day";                             // 06–17:59
+}
+
 /* =========== ユーザー/Day保存（Day番号ベース） =========== */
 function loadUser(pid){ try{return JSON.parse(localStorage.getItem(`emotion_user_${pid}`))||null}catch{ return null } }
 function saveUser(u){ try{localStorage.setItem(`emotion_user_${u.pid}`,JSON.stringify(u))}catch{} }
 function ensureUser(pid){
   let u=loadUser(pid);
-  if(!u){ u={pid, daysByNum:{}, weekly:{}, total_valid:0, max_day_num:1}; saveUser(u); }
+  if(!u){ u={pid, daysByNum:{}, total_valid:0, max_day_num:1}; saveUser(u); }
   return u;
 }
 function ensureDay(u,dayNum){
@@ -223,16 +213,16 @@ let validMin=0, playMin=0, anyBLE=false, bleDropped=false, lastHadBLE=false;
 let currentEmotionKey=null, waitingSwitch=false;
 let votes={tension:[],calm:[],depress:[]};
 let lastEmotion="unknown", lastNonUnknown="unknown", lastNonUnknownAt=0;
-let startedAtMs=0, paused=false, noPlayStreak=0;
+let startedAtMs=0;
 
-/* =========== AutoSave（当日ではなく“選択Day”で復元） =========== */
+/* =========== AutoSave（選択Dayで復元） =========== */
 const LS_KEY="emotion_recorder_autosave_v2";
 function saveState(){
   try{
     const payload={
       csvRows, sessionId, validMin, playMin, anyBLE, bleDropped, lastHadBLE,
       currentEmotionKey, waitingSwitch, votes, lastEmotion, lastNonUnknown,
-      lastNonUnknownAt, startedAtMs, paused, esmDueAt,
+      lastNonUnknownAt, startedAtMs, esmDueAt,
       hr_base, rmssd_base, sd_hr, sd_rmssd,
       pid:($("#pid").value||"pid"), condition:$("#cond").value, goal:$("#goalMin").value,
       dayNum: parseInt($("#dayNum").value||"1",10), algo: ALGO_VERSION
@@ -250,7 +240,7 @@ function loadStateIfAny(){
     votes=p.votes||{tension:[],calm:[],depress:[]};
     ["tension","calm","depress"].forEach(k=>{ if(votes[k].length>VOTE_WIN) votes[k]=votes[k].slice(-VOTE_WIN); });
     lastEmotion=p.lastEmotion||"unknown"; lastNonUnknown=p.lastNonUnknown||"unknown"; lastNonUnknownAt=p.lastNonUnknownAt||0;
-    startedAtMs=p.startedAtMs||Date.now(); paused=!!p.paused; esmDueAt=p.esmDueAt||0;
+    startedAtMs=p.startedAtMs||Date.now(); esmDueAt=p.esmDueAt||0;
     hr_base=p.hr_base??hr_base; rmssd_base=p.rmssd_base??rmssd_base; sd_hr=p.sd_hr??sd_hr; sd_rmssd=p.sd_rmssd??sd_rmssd;
     if(p.pid) $("#pid").value=p.pid; if(p.condition) $("#cond").value=p.condition; if(p.goal) $("#goalMin").value=p.goal;
     if(p.dayNum){ setDayBadgeNum(p.dayNum); }
@@ -388,7 +378,6 @@ function scheduleNextESM(){
   clearTimeout(esmTimer);
   const m=randomMinutes(28,34);
   esmDueAt=Date.now()+m*60*1000;
-  const d=new Date(esmDueAt);
   const j=nowJstObj(); j.setTime(esmDueAt);
   const hh=String(j.getHours()).padStart(2,"0")+":"+String(j.getMinutes()).padStart(2,"0");
   esmNext.textContent=`ESM: ${hh}頃`;
@@ -398,9 +387,11 @@ $("#esmModal").addEventListener("click",(e)=>{ if(e.target===$("#esmModal")) $("
 document.querySelectorAll("#esmModal button[data-esm]").forEach(btn=>{
   btn.addEventListener("click",()=>{
     const val=btn.getAttribute("data-esm");
-    csvRows.push([Date.now(), datetimeStrJST(), ($("#pid").value||"pid"),
-      new Date().toLocaleDateString("ja-JP"), dayIsoJST(), // 旧表示日付/JST日付
-      parseInt($("#dayNum").value||"1",10),                // 追加：day_num（手動）
+    csvRows.push([
+      Date.now(), datetimeStrJST(), ($("#pid").value||"pid"),
+      new Date().toLocaleDateString("ja-JP"), dayIsoJST(),
+      parseInt($("#dayNum").value||"1",10),
+      getTimeBinJST(),
       sessionId,"block1", $("#cond").value,
       "","","","","","","","","","", "","","","",
       hr_base,rmssd_base,sd_hr,sd_rmssd, 0,0, 0,0,0,0, "","","", "esm",val,
@@ -415,9 +406,9 @@ let prevHR=null, prevRMSSD=null;
 let hr_base=70, sd_hr=8, rmssd_base=0.04, sd_rmssd=0.018;
 const EWMA=0.05;
 
-/* =========== CSVヘッダ（JST列） =========== */
+/* =========== CSVヘッダ（JST＋time_bin） =========== */
 function makeHeader(){
-  csvRows=[[ "timestamp","datetime_jst","pid","day_local","day_iso_jst","day_num",
+  csvRows=[[ "timestamp","datetime_jst","pid","day_local","day_iso_jst","day_num","time_bin",
     "session_id","block","condition",
     "hr","rmssd","rmssd_ms","z_hr","z_rmssd","d_hr","d_rmssd",
     "roll_std_h","roll_std_rr","emotion",
@@ -463,8 +454,9 @@ async function oneTick(){
 
   // keep-alive
   if((condition==="MUSIC"||condition==="BOTH") && !exercise){
-    if(playing) noPlayStreak=0;
-    else { noPlayStreak++; if(noPlayStreak>=2){ log("🎧 keep-alive: 再生起動を試行"); await playPlaylist(PLAYLIST_CALM_MAINTAIN); noPlayStreak=0; } }
+    const j = await getCurrentPlaying().catch(()=>null);
+    const info2 = extractTrackInfo(j);
+    if(!info2.is_playing){ log("🎧 keep-alive: 再生起動を試行"); await playPlaylist(PLAYLIST_CALM_MAINTAIN); }
   }
 
   updateGoalView(goal);
@@ -476,7 +468,7 @@ async function oneTick(){
 
   csvRows.push([
     Date.now(), datetimeStrJST(), pid,
-    new Date().toLocaleDateString("ja-JP"), dayIsoJST(), dayNum,
+    new Date().toLocaleDateString("ja-JP"), dayIsoJST(), dayNum, getTimeBinJST(),
     sessionId,"block1", condition,
     hr??"", rmssd??"", rmssd_ms, z_hr===""?"":z_hr, z_rmssd===""?"":z_rmssd, d_hr, d_rmssd,
     "", "", emotion,
@@ -502,43 +494,31 @@ async function oneTick(){
   try{ const u=ensureUser(pid); const d=ensureDay(u, dayNum); d.total_valid=validMin; saveUser(u); setDayBadgeNum(dayNum);}catch{}
 
   log(`[tick JST] HR=${hr??"-"} playing=${playing?1:0} ex=${exercise} emotion=${emotion} validMin=${validMin}`);
+
   // 自動終了：目標到達のみ
   if($("#autoStop").checked && validMin>=goal){ log("⏱ 目標到達→自動終了"); stopSession(); return; }
 
   saveState();
 }
 function startTicking(){ if(timer) clearInterval(timer); timer=setInterval(oneTick, 60*1000); }
+function updateGoalView(goal){
+  const g=goal?goal:parseInt($("#goalMin").value||"120",10);
+  $("#goalText").textContent=`進捗: ${validMin} / ${g}分`;
+  const p=Math.max(0,Math.min(100, (validMin/g)*100 ));
+  $("#goalBar").style.width=p+"%";
+  $("#goalBar").style.background= (validMin>=g) ? "linear-gradient(90deg,#16a34a,#22c55e)" : "linear-gradient(90deg,#3870ff,#50e3c2)";
+}
 
 /* =========== UI/セッション管理 =========== */
-function updateGoalView(goal){
-  const weekly=$("#weeklyMode").checked;
-  if(!weekly){
-    const g=goal?goal:parseInt($("#goalMin").value||"120",10);
-    $("#goalText").textContent=`進捗: ${validMin} / ${g}分`;
-    const p=Math.max(0,Math.min(100, (validMin/g)*100 ));
-    $("#goalBar").style.width=p+"%";
-    $("#goalBar").style.background= (validMin>=g) ? "linear-gradient(90deg,#16a34a,#22c55e)" : "linear-gradient(90deg,#3870ff,#50e3c2)";
-  }else{
-    const pid=($("#pid").value||"pid").trim(); const u=ensureUser(pid);
-    const weekKey = new Date().toISOString().slice(0,10); // 表示のみ簡易
-    const got=(u.weekly[weekKey]||0);
-    $("#weeklyProg").textContent=`${got} 分`;
-    $("#goalText").textContent=`今セッション: ${validMin} 分`;
-    $("#goalBar").style.width="0%";
-  }
-}
-$("#weeklyMode").addEventListener("change",(e)=>{ $("#weeklyBox").style.display=e.target.checked?"flex":"none"; updateGoalView(); });
-
 function makeButtonsState(running){
   $("#btnStart").disabled=running; $("#btnStop").disabled=!running;
-  $("#btnPause").disabled=!running; $("#btnResume").disabled=true;
   $("#btnCsv").disabled=running;
 }
 function makeHeaderAndReset(){
   makeHeader();
   sessionId=Math.random().toString(36).slice(2,10);
   validMin=0; playMin=0; anyBLE=false; bleDropped=false; lastHadBLE=false;
-  currentEmotionKey=null; waitingSwitch=false; noPlayStreak=0;
+  currentEmotionKey=null; waitingSwitch=false;
   votes={tension:[],calm:[],depress:[]}; lastEmotion="unknown"; lastNonUnknown="unknown"; lastNonUnknownAt=0;
   startedAtMs=Date.now();
 }
@@ -569,7 +549,7 @@ function stopSession(){
     last[last.length-2]=reason_invalid;
   }else{
     csvRows.push([Date.now(), datetimeStrJST(), ($("#pid").value||"pid"),
-      new Date().toLocaleDateString("ja-JP"), dayIsoJST(), dayNum,
+      new Date().toLocaleDateString("ja-JP"), dayIsoJST(), dayNum, getTimeBinJST(),
       sessionId,"block1", $("#cond").value,
       "","","","","","","","","","", "","","","",
       hr_base,rmssd_base,sd_hr,sd_rmssd, 0,0, 0,0,0,0, "","","", "end","",
@@ -589,24 +569,22 @@ function stopSession(){
   log(`■ セッション終了（有効分=${validMin}分, 再生分=${playMin}分, 理由=${reason_invalid||"なし"}）`);
 }
 
-/* =========== アンケ/CSV =========== */
+/* =========== アンケ/CSV/その他 =========== */
 $("#btnNote").onclick=()=>{ const mood=$("#mood").value||"", relax=$("#relax").value||"", notes=$("#notes").value||"";
   if(csvRows.length>1){ const im=csvRows[0].indexOf("mood"), ir=csvRows[0].indexOf("relax"), inx=csvRows[0].indexOf("note");
     const last=csvRows[csvRows.length-1]; last[im]=mood; last[ir]=relax; last[inx]=notes; }
   log("📝 アンケ追加"); saveState(); };
+
 $("#btnCsv").onclick=()=>{ const lines=csvRows.map(r=>r.map(csvEscape).join(",")).join("\n");
   const blob=new Blob([lines],{type:"text/csv"});
   const a=Object.assign(document.createElement("a"),{href:URL.createObjectURL(blob),download:`emotion_log_${dayIsoJST()}_${sessionId}.csv`});
   a.click(); URL.revokeObjectURL(a.href); };
 
-/* =========== イベント/復元 =========== */
 $("#btnBle").onclick=connectBLE;
 $("#btnSp").onclick=loginSpotify;
 $("#btnStart").onclick=startSession;
 $("#btnStop").onclick=stopSession;
 $("#btnClear").onclick=clearLog;
-
-$("#pid").addEventListener("change",()=>{ const pid=($("#pid").value||"pid").trim(); const u=ensureUser(pid); ensureDay(u, parseInt($("#dayNum").value||"1",10)); });
 
 $("#dayMinus").onclick=()=>{ const n=Math.max(1, parseInt($("#dayNum").value||"1",10)-1); setDayBadgeNum(n); saveState(); };
 $("#dayPlus").onclick =()=>{ const n=parseInt($("#dayNum").value||"1",10)+1; setDayBadgeNum(n); saveState(); };
@@ -619,9 +597,8 @@ if(new URLSearchParams(location.search).get("code")) loginSpotify();
 if(loadStateIfAny()){
   const pid=($("#pid").value||"pid").trim(); ensureUser(pid); setDayBadgeNum(parseInt($("#dayNum").value||"1",10));
   updateGoalView(); log("🧩 途中データを復元しました。");
-  if(paused){ $("#btnStart").disabled=true; $("#btnStop").disabled=true; $("#btnPause").disabled=true; $("#btnResume").disabled=false; }
-  else{ makeButtonsState(true); if(esmDueAt>0){ const j=nowJstObj(); j.setTime(esmDueAt); const hh=String(j.getHours()).padStart(2,"0")+":"+String(j.getMinutes()).padStart(2,"0"); esmNext.textContent=`ESM: ${hh}頃`; }
-        scheduleNextESM(); startTicking(); }
+  if(esmDueAt>0){ const j=nowJstObj(); j.setTime(esmDueAt); const hh=String(j.getHours()).padStart(2,"0")+":"+String(j.getMinutes()).padStart(2,"0"); esmNext.textContent=`ESM: ${hh}頃`; }
+  startTicking();
 }
 window.addEventListener("beforeunload",(e)=>{
   const running=!$("#btnStop").disabled, hasRows=(csvRows && csvRows.length>1);
