@@ -37,10 +37,8 @@
   .progress{height:12px;background:#0c111b;border:1px solid var(--line);border-radius:999px;overflow:hidden}
   .bar{height:100%;width:0%;background:linear-gradient(90deg,#60a5fa,#22d3ee)}
   .section-title{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
-  /* Modal */
   .modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:9999}
   .modal .box{background:#121827;border:1px solid var(--line);border-radius:16px;padding:18px;max-width:460px;width:92%}
-  /* small helpers */
   .tiny{font-size:12px}
 </style>
 </head>
@@ -143,13 +141,13 @@
   <div class="card">
     <div class="section-title">
       <h2>ログ</h2>
-      <div class="row" style="gap:8px;flex:0 0 auto">
-        <button id="btnCsv" class="btn" disabled>CSVダウンロード</button>
-        <button id="btnClear" class="btn btn-ghost">画面ログをクリア</button>
-      </div>
     </div>
     <pre id="log" class="logbox" aria-live="polite"></pre>
-    <div class="muted tiny">※ ページを閉じても自動保存されます（復元可）。</div>
+    <div class="row" style="gap:8px;flex:0 0 auto;margin-top:10px">
+      <button id="btnCsv" class="btn" disabled>CSVダウンロード</button>
+      <button id="btnClear" class="btn btn-ghost">画面ログをクリア</button>
+    </div>
+    <div class="muted tiny" style="margin-top:6px">※ ページを閉じても自動保存されます（復元可）。</div>
   </div>
 </div>
 
@@ -212,7 +210,7 @@ function loadUser(pid){ try{return JSON.parse(localStorage.getItem(`emotion_user
 function saveUser(u){ try{localStorage.setItem(`emotion_user_${u.pid}`,JSON.stringify(u))}catch{} }
 function ensureUser(pid){ let u=loadUser(pid); if(!u){ u={pid, daysByNum:{}, total_valid:0, max_day_num:1}; saveUser(u); } return u; }
 function ensureDay(u,dayNum){ if(!u.daysByNum[dayNum]){ u.daysByNum[dayNum]={total_valid:0,sessions:[]}; if(dayNum>u.max_day_num) u.max_day_num=dayNum; saveUser(u);} return u.daysByNum[dayNum]; }
-function setDayBadgeNum(n){ $("#dayBadge").textContent=String(n); $("#dayNum").value=String(n); }
+function setDayBadgeNum(n){ const x=(!n || isNaN(n) || n<1) ? 1 : Math.floor(n); $("#dayBadge").textContent=String(x); $("#dayNum").value=String(x); }
 
 /* ======== 状態変数 ======== */
 let hr=null, rrList=[];
@@ -227,7 +225,7 @@ let lastEmotion="unknown", lastNonUnknown="unknown", lastNonUnknownAt=0;
 let startedAtMs=0;
 let isPaused=false;
 
-/* ======== AutoSave（Day選択別） ======== */
+/* ======== AutoSave ======== */
 const LS_KEY="emotion_recorder_autosave_v3";
 function saveState(){
   try{
@@ -405,9 +403,7 @@ document.querySelectorAll("#esmModal button[data-esm]").forEach(btn=>{
     const val=btn.getAttribute("data-esm");
     csvRows.push([
       Date.now(), datetimeStrJST(), ($("#pid").value||"pid"),
-      new Date().toLocaleDateString("ja-JP"), dayIsoJST(),
-      parseInt($("#dayNum").value||"1",10),
-      getTimeBinJST(),
+      new Date().toLocaleDateString("ja-JP"), dayIsoJST(), parseInt($("#dayNum").value||"1",10), getTimeBinJST(),
       sessionId,"block1", $("#cond").value,
       "","","","","","","","","","", "","","","",
       hr_base,rmssd_base,sd_hr,sd_rmssd, 0,0, 0,0,0,0, "","","", "esm",val,
@@ -547,11 +543,26 @@ function startSession(){
   const dayNum=parseInt($("#dayNum").value||"1",10);
   const u=ensureUser(pid); ensureDay(u, dayNum); setDayBadgeNum(dayNum);
 
-  makeButtonsState(true); makeHeaderAndReset(); updateGoalView(); log("▶ セッション開始: "+sessionId);
+  makeButtonsState(true);
+  makeHeaderAndReset();
+  updateGoalView();
+  log("▶ セッション開始: "+sessionId);
   scheduleNextESM();
 
-  if($("#cond").value==="MUSIC"||$("#cond").value==="BOTH"){ playPlaylist(PLAYLIST_CALM_MAINTAIN); }
-  startTicking(); saveState();
+  // Spotifyは失敗してもセッションは継続（awaitしない）
+  if($("#cond").value==="MUSIC"||$("#cond").value==="BOTH"){
+    playPlaylist(PLAYLIST_CALM_MAINTAIN).catch(e=>log("Spotify起動失敗: "+e.message));
+  }
+
+  // ★開始直後にも1回実行（体感改善 & setInterval遅延対策）
+  oneTick().catch(e=>log("oneTick初回エラー: "+(e?.message||e)));
+
+  // 自動終了の誤発火を避けるため、開始時に明示リセット
+  validMin = 0;
+  playMin  = 0;
+
+  startTicking();
+  saveState();
 }
 function stopSession(){
   clearInterval(timer); timer=null; clearTimeout(esmTimer); esmTimer=null; esmNext.textContent="ESM: 未予定";
@@ -616,6 +627,7 @@ $("#btnPlayCalm").onclick=()=>playPlaylist(PLAYLIST_CALM_MAINTAIN);
 $("#btnPlayTen").onclick =()=>playPlaylist(PLAYLIST_TENSION_TO_CALM);
 $("#btnPlayDep").onclick =()=>playPlaylist(PLAYLIST_DEPRESS_TO_LIFT);
 
+/* ======== 開始直後の復元＆タイマー起動 ======== */
 if(new URLSearchParams(location.search).get("code")) loginSpotify();
 if(loadStateIfAny()){
   const pid=($("#pid").value||"pid").trim(); ensureUser(pid); setDayBadgeNum(parseInt($("#dayNum").value||"1",10));
@@ -623,10 +635,16 @@ if(loadStateIfAny()){
   if(esmDueAt>0){ const j=nowJstObj(); j.setTime(esmDueAt); const hh=String(j.getHours()).padStart(2,"0")+":"+String(j.getMinutes()).padStart(2,"0"); esmNext.textContent=`ESM: ${hh}頃`; }
   startTicking();
 }
+
+/* ======== ウィンドウ離脱アラート ======== */
 window.addEventListener("beforeunload",(e)=>{
   const running=!$("#btnStop").disabled, hasRows=(csvRows && csvRows.length>1);
   if(running || hasRows){ e.preventDefault(); e.returnValue=""; }
 });
+
+/* ======== デバッグ：エラーを画面ログへ ======== */
+window.addEventListener("error", (e) => { log("⚠️ JSエラー: " + (e?.message||"")); });
+window.addEventListener("unhandledrejection", (e) => { log("⚠️ Promise未処理エラー: " + (e?.reason?.message || e?.reason || "")); });
 </script>
 </body>
 </html>
