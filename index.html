@@ -160,7 +160,7 @@
 </div>
 
 <script>
-/* ======== どこで落ちたかを詳細表示（行/列/stack） ======== */
+/* ======== ログとエラー可視化 ======== */
 function log(s){ const el=document.getElementById("log"); el.textContent+=s+"\n"; el.scrollTop=el.scrollHeight; }
 window.addEventListener("error", (e) => {
   const where = `${e.filename||''}:${e.lineno||''}:${e.colno||''}`;
@@ -211,12 +211,52 @@ function getTimeBinJST(d=nowJstObj()){
   return "day";
 }
 
-/* ======== ユーザー/Day保存 ======== */
-function loadUser(pid){ try{return JSON.parse(localStorage.getItem(`emotion_user_${pid}`))||null}catch{ return null } }
-function saveUser(u){ try{localStorage.setItem(`emotion_user_${u.pid}`,JSON.stringify(u))}catch{} }
-function ensureUser(pid){ let u=loadUser(pid); if(!u){ u={pid, daysByNum:{}, total_valid:0, max_day_num:1}; saveUser(u); } return u; }
-function ensureDay(u,dayNum){ if(!u.daysByNum[dayNum]){ u.daysByNum[dayNum]={total_valid:0,sessions:[]}; if(dayNum>u.max_day_num) u.max_day_num=dayNum; saveUser(u);} return u.daysByNum[dayNum]; }
-function setDayBadgeNum(n){ const x=(!n || isNaN(n) || n<1) ? 1 : Math.floor(n); $("#dayBadge").textContent=String(x); $("#dayNum").value=String(x); }
+/* ======== Day/ユーザーデータ（堅牢化） ======== */
+function toSafeDayNum(x){
+  const n = parseInt(x, 10);
+  return Number.isFinite(n) && n >= 1 ? n : 1;
+}
+function loadUser(pid){
+  try { const raw = localStorage.getItem(`emotion_user_${pid}`); if(!raw) return null; return JSON.parse(raw); } catch { return null; }
+}
+function saveUser(u){ try { localStorage.setItem(`emotion_user_${u.pid}`, JSON.stringify(u)); } catch {} }
+function ensureUser(pid){
+  let u = loadUser(pid);
+  if (!u || typeof u !== "object" || Array.isArray(u)) u = {};
+  if (!u.pid) u.pid = pid;
+  if (!u.daysByNum || typeof u.daysByNum !== "object" || Array.isArray(u.daysByNum)) u.daysByNum = {};
+  if (typeof u.total_valid !== "number" || !Number.isFinite(u.total_valid)) u.total_valid = 0;
+  if (typeof u.max_day_num !== "number" || !Number.isFinite(u.max_day_num) || u.max_day_num < 1) u.max_day_num = 1;
+  saveUser(u);
+  return u;
+}
+function ensureDay(u, dayNum){
+  const dn = toSafeDayNum(dayNum);
+  if (!u.daysByNum || typeof u.daysByNum !== "object") u.daysByNum = {};
+  if (!u.daysByNum[dn] || typeof u.daysByNum[dn] !== "object" || Array.isArray(u.daysByNum[dn])) {
+    u.daysByNum[dn] = { total_valid: 0, sessions: [] };
+  }
+  if (typeof u.max_day_num !== "number" || u.max_day_num < dn) u.max_day_num = dn;
+  saveUser(u);
+  return u.daysByNum[dn];
+}
+function setDayBadgeNum(n){ const x=toSafeDayNum(n); $("#dayBadge").textContent=String(x); $("#dayNum").value=String(x); }
+
+/* 旧フォーマットが残っていたら強制マイグレーション */
+(function migrateLegacyIfNeeded(){
+  try {
+    const pid = ($("#pid")?.value || "pid").trim();
+    const raw = localStorage.getItem(`emotion_user_${pid}`);
+    if (!raw) return;
+    const obj = JSON.parse(raw);
+    if (!obj || typeof obj !== "object" || Array.isArray(obj) ||
+        !obj.daysByNum || typeof obj.daysByNum !== "object" || Array.isArray(obj.daysByNum)) {
+      const fixed = { pid, daysByNum:{}, total_valid:0, max_day_num:1 };
+      localStorage.setItem(`emotion_user_${pid}`, JSON.stringify(fixed));
+      console.warn("migrated legacy emotion_user data");
+    }
+  } catch {}
+})();
 
 /* ======== 状態変数 ======== */
 let hr=null, rrList=[];
@@ -241,7 +281,7 @@ function saveState(){
       lastNonUnknownAt, startedAtMs, esmDueAt,
       hr_base, rmssd_base, sd_hr, sd_rmssd,
       pid:($("#pid").value||"pid"), condition:$("#cond").value, goal:$("#goalMin").value,
-      dayNum: parseInt($("#dayNum").value||"1",10), algo: ALGO_VERSION,
+      dayNum: toSafeDayNum($("#dayNum").value), algo: ALGO_VERSION,
       isPaused
     };
     localStorage.setItem(LS_KEY, JSON.stringify(payload));
@@ -287,7 +327,6 @@ async function connectBLE(){
 
     ch.addEventListener("characteristicvaluechanged",(e)=>{
       try{
-        // DataView に正規化（Uint8Array / ArrayBuffer も可）
         const raw=e?.target?.value;
         let v=null;
         if(raw instanceof DataView){
@@ -447,7 +486,7 @@ document.querySelectorAll("#esmModal button[data-esm]").forEach(btn=>{
     const val=btn.getAttribute("data-esm");
     csvRows.push([
       Date.now(), datetimeStrJST(), ($("#pid").value||"pid"),
-      new Date().toLocaleDateString("ja-JP"), dayIsoJST(), parseInt($("#dayNum").value||"1",10), getTimeBinJST(),
+      new Date().toLocaleDateString("ja-JP"), dayIsoJST(), toSafeDayNum($("#dayNum").value), getTimeBinJST(),
       sessionId,"block1", $("#cond").value,
       "","","","","","","","","","", "","","","",
       hr_base,rmssd_base,sd_hr,sd_rmssd, 0,0, 0,0,0,0, "","","", "esm",val,
@@ -485,7 +524,7 @@ async function oneTick(){
     const pid=($("#pid").value||"").trim()||"pid";
     const condition=$("#cond").value;
     const goal=parseInt($("#goalMin").value||"120",10);
-    const dayNum=parseInt($("#dayNum").value||"1",10);
+    const dayNum=toSafeDayNum($("#dayNum").value);
 
     const rmssd=calcRMSSD(rrList.slice(-10));
     const rmssd_ms = rmssd!=null ? Math.round(rmssd*1000) : "";
@@ -511,7 +550,7 @@ async function oneTick(){
       else{ validMin++; }
     }
 
-    // Spotify keep-alive（停止してたら起動）
+    // Spotify keep-alive
     if((condition==="MUSIC"||condition==="BOTH") && !exercise){
       const j = await getCurrentPlaying().catch(()=>null);
       const info2 = extractTrackInfo(j);
@@ -548,7 +587,10 @@ async function oneTick(){
 
     prevHR=hr; prevRMSSD=rmssd;
 
-    try{ const u=ensureUser(pid); const d=ensureDay(u, dayNum); d.total_valid=validMin; saveUser(u); setDayBadgeNum(dayNum);}catch{}
+    try{
+      const u=ensureUser(pid); const d=ensureDay(u, dayNum);
+      d.total_valid=validMin; saveUser(u); setDayBadgeNum(dayNum);
+    }catch{}
 
     log(`[tick JST] HR=${hr??"-"} playing=${playing?1:0} ex=${exercise} emotion=${emotion} validMin=${validMin}`);
 
@@ -585,7 +627,7 @@ function makeHeaderAndReset(){
 }
 function startSession(){
   const pid=($("#pid").value||"pid").trim();
-  const dayNum=parseInt($("#dayNum").value||"1",10);
+  const dayNum=toSafeDayNum($("#dayNum").value);
   const u=ensureUser(pid); ensureDay(u, dayNum); setDayBadgeNum(dayNum);
 
   makeButtonsState(true);
@@ -598,9 +640,8 @@ function startSession(){
     playPlaylist(PLAYLIST_CALM_MAINTAIN).catch(e=>log("Spotify起動失敗: "+e.message));
   }
 
-  // 開始直後に1回実行（ウォームアップ用）
   oneTick().catch(e=>log("oneTick初回エラー: "+(e?.message||e)));
-  validMin=0; playMin=0; // 誤加算リセット
+  validMin=0; playMin=0;
 
   startTicking();
   saveState();
@@ -609,13 +650,12 @@ function stopSession(){
   clearInterval(timer); timer=null; clearTimeout(esmTimer); esmTimer=null; esmNext.textContent="ESM: 未予定";
   makeButtonsState(false);
 
-  const condition=$("#cond").value, dayNum=parseInt($("#dayNum").value||"1",10);
+  const condition=$("#cond").value, dayNum=toSafeDayNum($("#dayNum").value);
   let reasons=[]; if(validMin<60) reasons.push("<60min");
   if((condition==="MUSIC"||condition==="BOTH") && playMin<30) reasons.push("playing<30");
   if(bleDropped) reasons.push("ble_drop");
   const reason_invalid=reasons.join("+")||"";
 
-  // csvRowsが壊れていても止めない保険
   if (!Array.isArray(csvRows) || csvRows.length === 0) {
     makeHeader();
     csvRows.push([Date.now(), datetimeStrJST(), ($("#pid").value||"pid"),
@@ -669,11 +709,10 @@ document.getElementById("btnSp").onclick=loginSpotify;
 document.getElementById("btnStart").onclick=startSession;
 document.getElementById("btnStop").onclick=stopSession;
 document.getElementById("btnClear").onclick=clearLog;
-
 document.getElementById("btnPause").onclick=()=>{ isPaused=!isPaused; document.getElementById("btnPause").textContent=isPaused?"再開":"一時停止"; log(isPaused?"⏸ 一時停止":"▶ 再開"); saveState(); };
 
-document.getElementById("dayMinus").onclick=()=>{ const n=Math.max(1, parseInt($("#dayNum").value||"1",10)-1); setDayBadgeNum(n); saveState(); };
-document.getElementById("dayPlus").onclick =()=>{ const n=parseInt($("#dayNum").value||"1",10)+1; setDayBadgeNum(n); saveState(); };
+document.getElementById("dayMinus").onclick=()=>{ const n=toSafeDayNum($("#dayNum").value)-1; setDayBadgeNum(Math.max(1,n)); saveState(); };
+document.getElementById("dayPlus").onclick =()=>{ const n=toSafeDayNum($("#dayNum").value)+1; setDayBadgeNum(n); saveState(); };
 
 document.getElementById("btnPlayCalm").onclick=()=>playPlaylist(PLAYLIST_CALM_MAINTAIN);
 document.getElementById("btnPlayTen").onclick =()=>playPlaylist(PLAYLIST_TENSION_TO_CALM);
@@ -682,10 +721,9 @@ document.getElementById("btnPlayDep").onclick =()=>playPlaylist(PLAYLIST_DEPRESS
 /* ======== 起動時の復元 ======== */
 if(new URLSearchParams(location.search).get("code")) loginSpotify();
 if(loadStateIfAny()){
-  const pid=($("#pid").value||"pid").trim(); ensureUser(pid); setDayBadgeNum(parseInt($("#dayNum").value||"1",10));
+  const pid=($("#pid").value||"pid").trim(); ensureUser(pid); setDayBadgeNum(toSafeDayNum($("#dayNum").value));
   updateGoalView(); log("🧩 途中データを復元しました。");
   if(esmDueAt>0){ const j=nowJstObj(); j.setTime(esmDueAt); const hh=String(j.getHours()).padStart(2,"0")+":"+String(j.getMinutes()).padStart(2,"0"); esmNext.textContent=`ESM: ${hh}頃`; }
-  // 復元時も動かす（セッション継続用）
   startTicking();
 }
 
