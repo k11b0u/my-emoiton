@@ -70,9 +70,7 @@
 <div class="wrap grid">
   <!-- 左：設定＆進行 -->
   <div class="card">
-    <div class="section-title">
-      <h2>セッション設定</h2>
-    </div>
+    <div class="section-title"><h2>セッション設定</h2></div>
 
     <div class="row" style="margin-bottom:10px">
       <div>
@@ -125,9 +123,7 @@
       </details>
     </div>
 
-    <div class="section-title" style="margin-top:10px">
-      <h2>就寝前アンケート</h2>
-    </div>
+    <div class="section-title" style="margin-top:10px"><h2>就寝前アンケート</h2></div>
     <div class="row">
       <div><label>いまの気分（0〜10）</label><input type="number" id="mood" min="0" max="10"/></div>
       <div><label>リラックス度（0〜10）</label><input type="number" id="relax" min="0" max="10"/></div>
@@ -139,9 +135,7 @@
 
   <!-- 右：ログ＆CSV -->
   <div class="card">
-    <div class="section-title">
-      <h2>ログ</h2>
-    </div>
+    <div class="section-title"><h2>ログ</h2></div>
     <pre id="log" class="logbox" aria-live="polite"></pre>
     <div class="row" style="gap:8px;flex:0 0 auto;margin-top:10px">
       <button id="btnCsv" class="btn" disabled>CSVダウンロード</button>
@@ -248,7 +242,12 @@ function loadStateIfAny(){
     csvRows=p.csvRows||[[]]; sessionId=p.sessionId||sessionId; validMin=p.validMin||0; playMin=p.playMin||0;
     anyBLE=!!p.anyBLE; bleDropped=!!p.bleDropped; lastHadBLE=!!p.lastHadBLE;
     currentEmotionKey=p.currentEmotionKey||null; waitingSwitch=!!p.waitingSwitch;
-    votes=p.votes||{tension:[],calm:[],depress:[]}; ["tension","calm","depress"].forEach(k=>{ if(votes[k].length>VOTE_WIN) votes[k]=votes[k].slice(-VOTE_WIN); });
+    // ★ votesガード（古い保存形式でも安全）
+    votes = (p.votes && typeof p.votes === "object") ? p.votes : { tension:[], calm:[], depress:[] };
+    ["tension","calm","depress"].forEach(k=>{
+      if (!Array.isArray(votes[k])) votes[k] = [];
+      if (votes[k].length > VOTE_WIN) votes[k] = votes[k].slice(-VOTE_WIN);
+    });
     lastEmotion=p.lastEmotion||"unknown"; lastNonUnknown=p.lastNonUnknown||"unknown"; lastNonUnknownAt=p.lastNonUnknownAt||0;
     startedAtMs=p.startedAtMs||Date.now(); esmDueAt=p.esmDueAt||0;
     hr_base=p.hr_base??hr_base; rmssd_base=p.rmssd_base??rmssd_base; sd_hr=p.sd_hr??sd_hr; sd_rmssd=p.sd_rmssd??sd_rmssd;
@@ -268,7 +267,7 @@ function calcRMSSD(rrs){
   return Math.sqrt(sum/n);
 }
 
-/* ======== BLE ======== */
+/* ======== BLE（堅牢化済み） ======== */
 async function connectBLE(){
   try{
     log("🩺 BLE: デバイス選択…");
@@ -277,15 +276,41 @@ async function connectBLE(){
     const svc=await server.getPrimaryService("heart_rate");
     const ch=await svc.getCharacteristic("heart_rate_measurement");
     await ch.startNotifications();
+
     ch.addEventListener("characteristicvaluechanged",(e)=>{
-      const v=e.target.value, flags=v.getUint8(0), f16=(flags&0x01)!==0, hasRR=(flags&0x10)!==0;
-      hr=f16?v.getUint16(1,true):v.getUint8(1);
-      anyBLE=true; lastHadBLE=true;
-      let idx=f16?3:2; const rrLocal=[];
-      if(hasRR){ while(idx+1<v.byteLength){ rrLocal.push(v.getUint16(idx,true)/1024.0); idx+=2; } }
-      if(rrLocal.length){ rrList.push(...rrLocal); if(rrList.length>60) rrList=rrList.slice(-60); }
-      bleStateEl.textContent=`接続中（HR=${hr})`;
+      try{
+        const v=e?.target?.value;
+        if(!(v instanceof DataView) || v.byteLength<2){ log("⚠️ BLE: short packet dropped"); return; }
+        const flags=v.getUint8(0);
+        const is16=(flags&0x01)!==0;
+        const hasRR=(flags&0x10)!==0;
+
+        if(is16){
+          if(v.byteLength>=3){ hr=v.getUint16(1,true); }
+          else{ log("⚠️ BLE: 16bit HR but packet too short"); return; }
+        }else{
+          hr=v.getUint8(1);
+        }
+
+        anyBLE=true; lastHadBLE=true;
+
+        const rrLocal=[];
+        if(hasRR){
+          let idx=is16?3:2;
+          while(idx+1<v.byteLength){
+            const rrSec=v.getUint16(idx,true)/1024.0;
+            if(rrSec>=0.3 && rrSec<=2.0) rrLocal.push(rrSec);
+            idx+=2;
+          }
+        }
+        if(rrLocal.length){
+          rrList.push(...rrLocal);
+          if(rrList.length>60) rrList=rrList.slice(-60);
+        }
+        bleStateEl.textContent=`接続中（HR=${hr})`;
+      }catch(err){ log("⚠️ BLE parse error: "+(err?.message||err)); }
     });
+
     dev.addEventListener("gattserverdisconnected",()=>{ bleStateEl.textContent="切断"; if(lastHadBLE) bleDropped=true; lastHadBLE=false; });
     bleStateEl.textContent="接続完了"; log("✅ BLE: 接続しました");
   }catch(err){ bleStateEl.textContent="未接続"; log("⚠️ BLE error: "+err.message); }
@@ -393,7 +418,7 @@ function scheduleNextESM(){
   const hh=String(j.getHours()).padStart(2,"0")+":"+String(j.getMinutes()).padStart(2,"0");
   esmNext.textContent=`ESM: ${hh}頃`;
   esmTimer=setTimeout(()=>{
-    if(isPaused){ scheduleNextESM(); return; }  // 停止中はスキップ＆再予約
+    if(isPaused){ scheduleNextESM(); return; }
     $("#esmModal").style.display="flex";
   }, m*60*1000);
 }
@@ -466,7 +491,7 @@ async function oneTick(){
     else{ validMin++; }
   }
 
-  // Spotify keep-alive（MUSIC/BOTHかつ運動中でない時）
+  // Spotify keep-alive
   if((condition==="MUSIC"||condition==="BOTH") && !exercise){
     const j = await getCurrentPlaying().catch(()=>null);
     const info2 = extractTrackInfo(j);
@@ -494,7 +519,6 @@ async function oneTick(){
     "", "", ALGO_VERSION
   ]);
 
-  // ベースライン更新（ほぼ中立）
   if(rmssd!=null && hr!=null && z_hr!=="" && z_rmssd!=="" && Math.abs(z_hr)<0.5 && z_rmssd>-0.3){
     hr_base=(1-EWMA)*hr_base + EWMA*hr;
     rmssd_base=(1-EWMA)*rmssd_base + EWMA*rmssd;
@@ -504,12 +528,10 @@ async function oneTick(){
 
   prevHR=hr; prevRMSSD=rmssd;
 
-  // Dayへ積算保存
   try{ const u=ensureUser(pid); const d=ensureDay(u, dayNum); d.total_valid=validMin; saveUser(u); setDayBadgeNum(dayNum);}catch{}
 
   log(`[tick JST] HR=${hr??"-"} playing=${playing?1:0} ex=${exercise} emotion=${emotion} validMin=${validMin}`);
 
-  // 自動終了：目標到達のみ（Pause中は評価しない）
   if(!isPaused && $("#autoStop").checked && validMin>=goal){ log("⏱ 目標到達→自動終了"); stopSession(); return; }
 
   saveState();
@@ -549,17 +571,15 @@ function startSession(){
   log("▶ セッション開始: "+sessionId);
   scheduleNextESM();
 
-  // Spotifyは失敗してもセッションは継続（awaitしない）
   if($("#cond").value==="MUSIC"||$("#cond").value==="BOTH"){
     playPlaylist(PLAYLIST_CALM_MAINTAIN).catch(e=>log("Spotify起動失敗: "+e.message));
   }
 
-  // ★開始直後にも1回実行（体感改善 & setInterval遅延対策）
+  // 開始直後に1回実行
   oneTick().catch(e=>log("oneTick初回エラー: "+(e?.message||e)));
 
-  // 自動終了の誤発火を避けるため、開始時に明示リセット
-  validMin = 0;
-  playMin  = 0;
+  // 自動終了の誤発火回避
+  validMin=0; playMin=0;
 
   startTicking();
   saveState();
@@ -573,6 +593,17 @@ function stopSession(){
   if((condition==="MUSIC"||condition==="BOTH") && playMin<30) reasons.push("playing<30");
   if(bleDropped) reasons.push("ble_drop");
   const reason_invalid=reasons.join("+")||"";
+
+  // ★ csvRowsが壊れていても止めない保険
+  if (!Array.isArray(csvRows) || csvRows.length === 0) {
+    makeHeader();
+    csvRows.push([Date.now(), datetimeStrJST(), ($("#pid").value||"pid"),
+      new Date().toLocaleDateString("ja-JP"), dayIsoJST(),
+      dayNum, getTimeBinJST(), sessionId,"block1", $("#cond").value,
+      "","","","","","","","","","", "","","","",
+      hr_base,rmssd_base,sd_hr,sd_rmssd, 0,0, 0,0,0,0, "","","", "init","", "", "", ALGO_VERSION
+    ]);
+  }
 
   if(csvRows.length>1){
     const last=csvRows[csvRows.length-1];
@@ -627,7 +658,7 @@ $("#btnPlayCalm").onclick=()=>playPlaylist(PLAYLIST_CALM_MAINTAIN);
 $("#btnPlayTen").onclick =()=>playPlaylist(PLAYLIST_TENSION_TO_CALM);
 $("#btnPlayDep").onclick =()=>playPlaylist(PLAYLIST_DEPRESS_TO_LIFT);
 
-/* ======== 開始直後の復元＆タイマー起動 ======== */
+/* ======== 起動時の復元 ======== */
 if(new URLSearchParams(location.search).get("code")) loginSpotify();
 if(loadStateIfAny()){
   const pid=($("#pid").value||"pid").trim(); ensureUser(pid); setDayBadgeNum(parseInt($("#dayNum").value||"1",10));
