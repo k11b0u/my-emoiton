@@ -18,19 +18,24 @@
   .toprow{display:flex;gap:10px;align-items:center;justify-content:space-between;padding:10px 14px}
   .chips{display:flex;gap:8px;flex-wrap:wrap}
   .chip{display:inline-flex;gap:6px;align-items:center;padding:6px 10px;border:1px solid var(--line);border-radius:999px;background:var(--panel2);font-size:13px}
+  /* ——— クリック不能対策（かぶさり/巻き込み） ——— */
+  .topbar, .wrap, .card, .row { position: relative; z-index: 1; }
+  .chips, .chip { pointer-events: none; } /* バッジはクリック不要 */
+  .modal { pointer-events: none; }        /* 非表示時はクリック拾わない */
+  .modal[style*="display: flex"] { pointer-events: auto; } /* 表示時のみ */
   .grid{display:grid;gap:12px;margin-top:12px}
   @media (min-width:980px){ .grid{grid-template-columns:1.05fr .95fr} }
   .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,.25)}
   .row{display:flex;gap:10px;flex-wrap:wrap}
   .row > *{flex:1 1 0}
-  .btn{padding:10px 14px;border:1px solid var(--line);border-radius:12px;background:#1c2130;color:var(--txt);cursor:pointer;transition:.15s}
+  .btn{padding:10px 14px;border:1px solid var(--line);border-radius:12px;background:#1c2130;color:var(--txt);cursor:pointer;transition:.15s; pointer-events:auto;}
   .btn:hover:not(:disabled){ transform:translateY(-1px); background:#22283a }
   .btn:disabled{opacity:.55;cursor:not-allowed}
   .btn-primary{background:linear-gradient(180deg,#3b82f6,#4f46e5);border-color:#3840a8}
   .btn-danger{background:linear-gradient(180deg,#ef4444,#b91c1c);border-color:#7f1d1d}
   .btn-ghost{background:transparent}
   .switch{display:inline-flex;gap:8px;align-items:center;border:1px solid var(--line);border-radius:12px;background:var(--panel2);padding:8px 10px}
-  input,select,textarea{width:100%;padding:10px;border-radius:12px;border:1px solid var(--line);background:#111525;color:var(--txt)}
+  input,select,textarea{width:100%;padding:10px;border-radius:12px;border:1px solid var(--line);background:#111525;color:var(--txt); pointer-events:auto;}
   .muted{color:var(--muted);font-size:13px}
   .logbox{white-space:pre-wrap;height:260px;overflow:auto;background:#0c111b;color:#e6ebf2;border:1px solid var(--line);
           border-radius:12px;padding:10px;font-family:ui-monospace,Consolas,monospace}
@@ -101,8 +106,8 @@
       </div>
     </div>
 
-    <div class="row" style="align-items:center;margin-bottom:10px">
-      <div style="max-width:220px">
+    <div class="row" style="align-items:center;margin-bottom:10px;gap:12px">
+      <div style="max-width:260px">
         <label class="muted">実験日（Day）を手動で調整</label>
         <div class="row" style="gap:6px;align-items:center">
           <button id="dayMinus" class="btn">−</button>
@@ -252,14 +257,13 @@ let isPaused=false;
 /* ===== 香り（SwitchBot Cloud API直叩き：埋め込み） ===== */
 const SWITCHBOT_TOKEN = "3ca5812e6d4bc4a01e73bd603eb854734d2d97937e543cdf56fb1467ed4e0810a23cccfa70f26238d7d9f2ff310b940a";
 const SWITCHBOT_TENSION_ID = "E16A84063A18"; // 緊張系（強め香り）
-const SWITCHBOT_RELAX_ID   = "E16A8386467A"; // 鎮静系（穏やか香り） ※CALM時はOFFにするだけでONしない運用
+const SWITCHBOT_RELAX_ID   = "E16A8386467A"; // 鎮静系（穏やか香り）※今の運用ではCALM時はOFFのみ
 const SWITCHBOT_DEPRESS_ID = "D23534382415"; // 落ち込み系（リフトアップ香り）
 
-let scentIsOn=false;                 // いずれかのデバイスが直近でON状態（押した）とみなすフラグ
-let lastScentDeviceId="";            // 直近ONにしたデバイスID
+let scentIsOn=false;                 // 直近でONにした何かがあるか
+let lastScentDeviceId="";            // 直近ON機のID
 let lastScentOpAt=0;                 // クールダウン（20s）
 const SCENT_COOLDOWN_MS = 20*1000;
-
 function canScentOp(){ return (Date.now()-lastScentOpAt) > SCENT_COOLDOWN_MS; }
 async function switchbotPress(deviceId, times){
   if(!deviceId) throw new Error("SwitchBot deviceIdが空です");
@@ -269,8 +273,8 @@ async function switchbotPress(deviceId, times){
       headers:{ "Authorization":SWITCHBOT_TOKEN, "Content-Type":"application/json; charset=utf8"},
       body: JSON.stringify({ command:"press", parameter:"default", commandType:"command" })
     }).catch(err=>({ok:false,statusText:String(err)}));
-    if(!r || !r.ok){ log(`⚠️ SwitchBot press失敗 dev=${deviceId} (${r?.status||"noresp"}) ※CORSの場合はプロキシ推奨`); }
-    await new Promise(res=>setTimeout(res, 600)); // 2回押しの間隔
+    if(!r || !r.ok){ log(`⚠️ SwitchBot press失敗 dev=${deviceId} (${r?.status||"noresp"}) ※CORSならプロキシ推奨`); }
+    await new Promise(res=>setTimeout(res, 600));
   }
 }
 async function scentOnFor(deviceId, label){
@@ -306,14 +310,12 @@ async function scentOffCurrent(){
   }catch(e){ log("⚠️ scentOff失敗: "+e.message); }
   scentIsOn=false; lastScentDeviceId=""; $("#scentBadge").textContent="off";
 }
-/** emotion → デバイスID（ON先） */
 function deviceForEmotion(emotion){
   if(emotion==="tension") return [SWITCHBOT_TENSION_ID,"tension"];
   if(emotion==="depress") return [SWITCHBOT_DEPRESS_ID,"depress"];
-  return [null,null]; // calm/unknown はOFF方針
+  return [null,null]; // calm/unknown はOFFのみ
 }
 async function handleScentForEmotion(emotion, condition, exercise){
-  // SCENT/BOTH のみ、WARMUP/運動中は抑制
   if(!(condition==="SCENT"||condition==="BOTH")) return;
   if(exercise) return;
   if(Date.now()-startedAtMs < WARMUP_MIN*60*1000) return;
@@ -322,20 +324,18 @@ async function handleScentForEmotion(emotion, condition, exercise){
 
   if(targetDev){ // TENSION/DEPRESS
     if(scentIsOn && lastScentDeviceId && lastScentDeviceId!==targetDev){
-      // 旧デバイスをOFF→新デバイスON
       await scentOffCurrent();
       await scentOnFor(targetDev, label);
     }else if(!scentIsOn){
       await scentOnFor(targetDev, label);
-    } // 既に同じデバイスONなら何もしない
+    }
   }else{
-    // CALM/UNKNOWN → 現在ONならOFF
     if(scentIsOn){ await scentOffCurrent(); }
   }
 }
 
 /* ===== AutoSave ===== */
-const LS_KEY="emotion_recorder_autosave_v5_scent3";
+const LS_KEY="emotion_recorder_autosave_v6_clickfix";
 function saveState(){
   try{
     const payload={
@@ -365,7 +365,6 @@ function loadStateIfAny(){
     if(p.pid) $("#pid").value=p.pid; if(p.condition) $("#cond").value=p.condition; if(p.goal) $("#goalMin").value=p.goal;
     if(p.dayNum){ setDayBadgeNum(p.dayNum); }
     isPaused=!!p.isPaused; $("#btnPause").textContent=isPaused?"再開":"一時停止";
-
     scentIsOn=!!p.scentIsOn; lastScentDeviceId=p.lastScentDeviceId||""; lastScentOpAt=p.lastScentOpAt||0;
     $("#scentBadge").textContent = scentIsOn ? "on" : "off";
     return true;
@@ -470,7 +469,6 @@ async function bootAndPlay(uri){
 async function playPlaylist(uri){ const ok=await bootAndPlay(uri); if(!ok) log("⚠️ 再生できません（端末/広告/権限）"); }
 
 /* ===== プレイリスト切替（曲末待ち） ===== */
-let currentEmotionKey=null, waitingSwitch=false;
 async function scheduleSwitchIfNeeded(targetKey){
   if(targetKey===currentEmotionKey || waitingSwitch) return;
   waitingSwitch=true;
@@ -520,6 +518,7 @@ function scheduleNextESM(){
 }
 const esmModal=document.getElementById("esmModal");
 esmModal.addEventListener("click",(e)=>{ if(e.target===esmModal) esmModal.style.display="none"; });
+window.addEventListener("keydown",(e)=>{ if(e.key==="Escape"){ esmModal.style.display="none"; } });
 document.querySelectorAll("#esmModal button[data-esm]").forEach(btn=>{
   btn.addEventListener("click",()=>{
     const val=btn.getAttribute("data-esm");
@@ -595,7 +594,7 @@ async function oneTick(){
       else{ validMin++; }
     }
 
-    // Spotify keep-alive（MUSIC/BOTHの日）
+    // Spotify keep-alive
     if((condition==="MUSIC"||condition==="BOTH") && !exercise){
       const j = await getCurrentPlaying().catch(()=>null);
       const info2 = extractTrackInfo(j);
@@ -604,16 +603,16 @@ async function oneTick(){
 
     updateGoalView(goal);
 
-    // 音楽プレイリストの切替（MUSIC/BOTHの日）
+    // 音楽
     if((condition==="MUSIC"||condition==="BOTH") && !exercise){
       const key = emotion==="tension"?"tension":(emotion==="calm"?"calm":(emotion==="depress"?"depress":null));
       if(key) scheduleSwitchIfNeeded(key);
     }
 
-    // 香り（SCENT/BOTHの日）
+    // 香り
     await handleScentForEmotion(emotion, condition, exercise);
 
-    // ログ1分行
+    // CSV 1分行
     csvRows.push([
       Date.now(), datetimeStrJST(), pid,
       new Date().toLocaleDateString("ja-JP"), dayIsoJST(), dayNum, getTimeBinJST(),
@@ -655,11 +654,18 @@ async function oneTick(){
 function startTicking(){ if(timer) clearInterval(timer); timer=setInterval(oneTick, 60*1000); }
 
 /* ===== UI/セッション管理 ===== */
+/* クリック不能の“巻き込みdisable”を防ぐ：セッション系のみ制御 */
 function makeButtonsState(running){
-  $("#btnStart").disabled=running;
-  $("#btnPause").disabled=!running;
-  $("#btnStop").disabled=!running;
-  $("#btnCsv").disabled=running;
+  document.getElementById("btnStart").disabled = running;
+  document.getElementById("btnPause").disabled = !running;
+  document.getElementById("btnStop").disabled  = !running;
+  document.getElementById("btnCsv").disabled   = running;
+  // 常に押せるよう固定
+  document.getElementById("btnBle").disabled = false;
+  document.getElementById("btnSp").disabled  = false;
+  document.getElementById("dayMinus").disabled = false;
+  document.getElementById("dayPlus").disabled  = false;
+  document.getElementById("dayNum").disabled   = false;
 }
 function makeHeaderAndReset(){
   makeHeader();
@@ -672,25 +678,29 @@ function makeHeaderAndReset(){
   scentIsOn=false; lastScentDeviceId=""; lastScentOpAt=0; $("#scentBadge").textContent="off";
 }
 function startSession(){
-  const pid=($("#pid").value||"pid").trim();
-  const dayNum=toSafeDayNum($("#dayNum").value);
-  const u=ensureUser(pid); ensureDay(u, dayNum); setDayBadgeNum(dayNum);
+  try{
+    const pid=($("#pid").value||"pid").trim();
+    const dayNum=toSafeDayNum($("#dayNum").value);
+    const u=ensureUser(pid); ensureDay(u, dayNum); setDayBadgeNum(dayNum);
 
-  makeButtonsState(true);
-  makeHeaderAndReset();
-  updateGoalView();
-  log("▶ セッション開始: "+sessionId);
-  scheduleNextESM();
+    makeButtonsState(true);
+    makeHeaderAndReset();
+    updateGoalView();
+    log("▶ セッション開始: "+sessionId);
+    scheduleNextESM();
 
-  if($("#cond").value==="MUSIC"||$("#cond").value==="BOTH"){
-    playPlaylist(PLAYLIST_CALM_MAINTAIN).catch(e=>log("Spotify起動失敗: "+e.message));
+    if($("#cond").value==="MUSIC"||$("#cond").value==="BOTH"){
+      playPlaylist(PLAYLIST_CALM_MAINTAIN).catch(e=>log("Spotify起動失敗: "+e.message));
+    }
+
+    oneTick().catch(e=>log("oneTick初回エラー: "+(e?.message||e)));
+    validMin=0; playMin=0;
+
+    startTicking();
+    saveState();
+  }catch(e){
+    log("⚠️ startSessionで例外: "+(e?.message||e));
   }
-
-  oneTick().catch(e=>log("oneTick初回エラー: "+(e?.message||e)));
-  validMin=0; playMin=0;
-
-  startTicking();
-  saveState();
 }
 function stopSession(){
   clearInterval(timer); timer=null; clearTimeout(esmTimer); esmTimer=null; esmNext.textContent="ESM: 未予定";
@@ -750,19 +760,26 @@ document.getElementById("btnCsv").onclick=()=>{ const lines=csvRows.map(r=>r.map
   const a=Object.assign(document.createElement("a"),{href:URL.createObjectURL(blob),download:`emotion_log_${dayIsoJST()}_${sessionId}.csv`});
   a.click(); URL.revokeObjectURL(a.href); };
 
-document.getElementById("btnBle").onclick=connectBLE;
-document.getElementById("btnSp").onclick=loginSpotify;
-document.getElementById("btnStart").onclick=startSession;
-document.getElementById("btnStop").onclick=stopSession;
-document.getElementById("btnClear").onclick=clearLog;
-document.getElementById("btnPause").onclick=()=>{ isPaused=!isPaused; document.getElementById("btnPause").textContent=isPaused?"再開":"一時停止"; log(isPaused?"⛔ 一時停止":"▶ 再開"); saveState(); };
+/* ===== コアハンドラ：JSが途中で落ちても再付与 ===== */
+function bindCoreHandlers(){
+  const byId = id => document.getElementById(id);
+  byId("btnBle")  && byId("btnBle").addEventListener("click", connectBLE, {once:false});
+  byId("btnSp")   && byId("btnSp").addEventListener("click", loginSpotify, {once:false});
+  byId("btnStart")&& byId("btnStart").addEventListener("click", startSession, {once:false});
+  byId("btnPause")&& byId("btnPause").addEventListener("click", ()=>{ isPaused=!isPaused; byId("btnPause").textContent=isPaused?"再開":"一時停止"; log(isPaused?"⛔ 一時停止":"▶ 再開"); saveState(); }, {once:false});
+  byId("btnStop") && byId("btnStop").addEventListener("click", stopSession, {once:false});
+  byId("btnClear")&& byId("btnClear").addEventListener("click", clearLog, {once:false});
 
-document.getElementById("dayMinus").onclick=()=>{ const n=toSafeDayNum($("#dayNum").value)-1; setDayBadgeNum(Math.max(1,n)); saveState(); };
-document.getElementById("dayPlus").onclick =()=>{ const n=toSafeDayNum($("#dayNum").value)+1; setDayBadgeNum(n); saveState(); };
+  byId("dayMinus")&& byId("dayMinus").addEventListener("click", ()=>{ const n=toSafeDayNum(byId("dayNum").value)-1; setDayBadgeNum(Math.max(1,n)); saveState(); });
+  byId("dayPlus") && byId("dayPlus").addEventListener("click", ()=>{ const n=toSafeDayNum(byId("dayNum").value)+1; setDayBadgeNum(n); saveState(); });
+  byId("dayNum")  && byId("dayNum").addEventListener("change", ()=>{ setDayBadgeNum(toSafeDayNum(byId("dayNum").value)); saveState(); });
 
-document.getElementById("btnPlayCalm").onclick=()=>playPlaylist(PLAYLIST_CALM_MAINTAIN);
-document.getElementById("btnPlayTen").onclick =()=>playPlaylist(PLAYLIST_TENSION_TO_CALM);
-document.getElementById("btnPlayDep").onclick =()=>playPlaylist(PLAYLIST_DEPRESS_TO_LIFT);
+  byId("btnPlayCalm")&& byId("btnPlayCalm").addEventListener("click", ()=>playPlaylist(PLAYLIST_CALM_MAINTAIN));
+  byId("btnPlayTen") && byId("btnPlayTen").addEventListener("click", ()=>playPlaylist(PLAYLIST_TENSION_TO_CALM));
+  byId("btnPlayDep") && byId("btnPlayDep").addEventListener("click", ()=>playPlaylist(PLAYLIST_DEPRESS_TO_LIFT));
+}
+document.addEventListener("DOMContentLoaded", bindCoreHandlers);
+setTimeout(bindCoreHandlers, 0); // 初期化後の保険
 
 /* ===== 起動時の復元 ===== */
 if(new URLSearchParams(location.search).get("code")) loginSpotify();
