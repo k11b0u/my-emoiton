@@ -1,120 +1,205 @@
 // /api/switchbot.js
 export const config = { runtime: "edge" };
 
-/**
- * 必須 環境変数:
- * - SWITCHBOT_TOKEN         : SwitchBotの長いトークン（"Bearer "は付けない）
- * - DEVICE_EMOTION_JSON     : {"tension":"E16...","relax":"E16...","depress":"D23..."} など（文字列のJSON）
- * 任意 環境変数:
- * - DEVICE_MAP_JSON         : {"hiro":"E16..."} など（participantId→deviceId のマップ／文字列のJSON）
- * - CORS_ORIGIN             : 例 "https://yourapp.vercel.app"（省略時 "*"）
- *
- * リクエスト(JSON):
- * { emotion?: "tension"|"relax"|"depress",
- *   deviceId?: string,
- *   participantId?: string,
- *   commandKey?: "press" | 他のSwitchBotコマンド,
- *   times?: number }  // デフォルト1。2にすると「2回押し（OFF相当）」などができる
- *
- * 優先順位: deviceId > emotion > participantId
- */
+// CORSヘッダ
+function cors(origin) {
+  const o = origin || "*";
+  return {
+    "Access-Control-Allow-Origin": o,
+    "Access-Control-Allow-Methods": "POST,OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+  };
+}
 
-export default async (req) => {
+// JSONレスポンスヘルパ
+function json(status, obj, origin) {
+  return new Response(JSON.stringify(obj), {
+    status,
+    headers: {
+      "Content-Type": "application/json",
+      ...cors(origin),
+    },
+  });
+}
+
+// SwitchBot用署名作成（v1.1）
+async function buildHeadersV11(token, secret) {
+  const t = Date.now();
+  const nonce = crypto.randomUUID();
+  const encoder = new TextEncoder();
+  const data = encoder.encode(token + t + nonce);
+
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sigBuf = await crypto.subtle.sign("HMAC", key, data);
+  const bytes = new Uint8Array(sigBuf);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  const sign = btoa(bin).toUpperCase();
+
+  return {
+    Authorization: token,
+    sign,
+    t: String(t),
+    nonce,
+    "Content-Type": "application/json",
+  };
+}
+
+export default async function handler(req) {
   const ORIGIN = process.env.CORS_ORIGIN || "*";
 
-  // CORS preflight
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: cors(ORIGIN) });
   }
   if (req.method !== "POST") {
-    return json(405, { ok: false, error: "Method Not Allowed" }, ORIGIN);
+    return json(405, { ok: false, error: "method_not_allowed" }, ORIGIN);
   }
 
-  // env
-  const token = process.env.SWITCHBOT_TOKEN;
-  if (!token) return json(500, { ok: false, error: "server misconfig: no token" }, ORIGIN);
-
-  const EMO_MAP = safeParse(process.env.DEVICE_EMOTION_JSON);
-  const PID_MAP = safeParse(process.env.DEVICE_MAP_JSON);
-
-  // body
   let body;
   try {
     body = await req.json();
   } catch {
-    return json(400, { ok: false, error: "invalid json" }, ORIGIN);
+    return json(400, { ok: false, error: "invalid_json" }, ORIGIN);
   }
 
-  const {
-    deviceId: directId,
-    emotion,             // "tension" | "relax" | "depress"
-    participantId,       // 旧来のID→deviceId 変換にも対応
-    commandKey = "press",
-    times = 1,
-  } = body || {};
+  let { emotion, deviceId, times } = body || {};
+  times = Number(times) || 1;
+  emotion = emotion || "";
 
-  // 解決（優先度: deviceId > emotion > participantId）
-  const fromEmotion = emotion ? EMO_MAP?.[emotion] : null;
-  const fromPid     = participantId ? PID_MAP?.[participantId] : null;
-  const deviceId    = directId || fromEmotion || fromPid;
-
-  if (!deviceId) {
-    return json(400, { ok: false, error: "device id not found", emotion, participantId }, ORIGIN);
+  const token = (process.env.SWITCHBOT_TOKEN || "").trim();
+  if (!token) {
+    return json(500, { ok: false, error: "missing_switchbot_token" }, ORIGIN);
   }
 
-  // SwitchBot API 呼び出し
-  const url = `https://api.switch-bot.com/v1.1/devices/${encodeURIComponent(deviceId)}/commands`;
-  const results = [];
+  // DEVICE_MAP_JSON / DEVICE_EMOTION_JSON のどちらでもOK
+  const rawMap =
+    process.env.DEVICE_MAP_JSON ||
+    process.env.DEVICE_EMOTION_JSON ||
+    "{}";
 
-  for (let i = 0; i < Number(times); i++) {
-    const r = await fetch(url, {
-      method: "POST",
-      headers: {
-        // NOTE: ここは "Authorization": token（そのまま）。"Bearer " を付けないでOK
-        "Authorization": token,
-        "Content-Type": "application/json; charset=utf8",
+  let map = {};
+  try {
+    map = JSON.parse(rawMap);
+  } catch {
+    map = {};
+  }
+
+  const known_keys = Object.keys(map);
+
+  // emotion から map を引く（大文字小文字ゆるく）
+  let resolvedId = deviceId || null;
+  if (!resolvedId && emotion) {
+    const target = String(emotion).toLowerCase();
+    for (const [k, v] of Object.entries(map)) {
+      if (String(k).toLowerCase() === target) {
+        resolvedId = v;
+        break;
+      }
+    }
+  }
+
+  if (!resolvedId) {
+    return json(
+      400,
+      {
+        ok: false,
+        error: "device_id_not_found",
+        emotion,
+        deviceId,
+        known_keys,
       },
-      body: JSON.stringify({
-        command: commandKey,
-        parameter: "default",
-        commandType: "command",
-      }),
-    });
+      ORIGIN
+    );
+  }
 
-    const text = await r.text();
-    let data;
-    try { data = JSON.parse(text); } catch { data = { raw: text }; }
+  // v1.1 or v1.0 を選択
+  const secret =
+    (process.env.SWITCHBOT_SECRET || process.env.SWITCHBOT_CLIENT_SECRET || "").trim();
 
-    results.push({ status: r.status, body: data });
+  let urlBase = "https://api.switch-bot.com";
+  let apiPath;
+  let headers;
 
-    // SwitchBot公式の成功は body.statusCode === 100
-    if (!r.ok || data?.statusCode !== 100) {
-      // 200で返しつつ ok:false にしておくとフロントで同一処理しやすい
-      return json(200, { ok: false, error: "switchbot_error", tries: i + 1, results }, ORIGIN);
+  if (secret) {
+    // v1.1（署名付き）
+    apiPath = `/v1.1/devices/${encodeURIComponent(resolvedId)}/commands`;
+    headers = await buildHeadersV11(token, secret);
+  } else {
+    // v1.0（トークンのみ）
+    apiPath = `/v1.0/devices/${encodeURIComponent(resolvedId)}/commands`;
+    headers = {
+      Authorization: token,
+      "Content-Type": "application/json",
+    };
+  }
+
+  const url = urlBase + apiPath;
+
+  const commandBody = {
+    command: "press",
+    parameter: "default",
+    commandType: "command",
+  };
+
+  let lastResponse = null;
+
+  try {
+    for (let i = 0; i < times; i++) {
+      const r = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(commandBody),
+      });
+
+      const text = await r.text();
+      let jsonBody;
+      try {
+        jsonBody = JSON.parse(text);
+      } catch {
+        jsonBody = { raw: text };
+      }
+
+      lastResponse = {
+        status: r.status,
+        body: jsonBody,
+      };
+
+      // 2回押しのときにちょっと間を空ける
+      if (i < times - 1) {
+        await new Promise((res) => setTimeout(res, 800));
+      }
     }
 
-    // ダブルプレスの間隔
-    await wait(600);
+    return json(
+      200,
+      {
+        ok: true,
+        emotion,
+        deviceId: resolvedId,
+        times,
+        known_keys,
+        last: lastResponse,
+      },
+      ORIGIN
+    );
+  } catch (e) {
+    return json(
+      500,
+      {
+        ok: false,
+        error: "switchbot_request_failed",
+        message: String(e),
+        emotion,
+        deviceId: resolvedId,
+        known_keys,
+      },
+      ORIGIN
+    );
   }
-
-  return json(200, { ok: true, tries: Number(times), results }, ORIGIN);
-};
-
-/* ---------- helpers ---------- */
-function cors(origin) {
-  return {
-    "Access-Control-Allow-Origin": origin,
-    "Access-Control-Allow-Methods": "POST,OPTIONS",
-    "Access-Control-Allow-Headers": "content-type,authorization",
-  };
 }
-function json(status, obj, origin) {
-  return new Response(JSON.stringify(obj), {
-    status,
-    headers: { "Content-Type": "application/json", ...cors(origin) },
-  });
-}
-function safeParse(s) {
-  try { return JSON.parse(s || "{}"); } catch { return {}; }
-}
-function wait(ms) { return new Promise(res => setTimeout(res, ms)); }
